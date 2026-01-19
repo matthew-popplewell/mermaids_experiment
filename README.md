@@ -71,6 +71,33 @@ If no device is found:
 - Try a different USB cable or port
 - Verify the mount's power LED is on
 
+## Physical Mount Alignment
+
+For accurate Az/El pointing, the mount must be physically aligned before use.
+
+### Step 1: Level the Tripod
+
+Use a bubble level to ensure the tripod head is level. All three legs should be on stable ground.
+
+### Step 2: Polar Alignment
+
+The Star Adventurer GTi is an equatorial mount. Its RA (Right Ascension) axis must point toward the celestial pole for accurate coordinate conversion.
+
+**Northern Hemisphere:**
+1. Point the mount's polar axis toward Polaris (the North Star)
+2. Set the latitude scale on the mount to match your latitude
+3. Use the polar scope (if equipped) for fine adjustment
+
+**Southern Hemisphere:**
+1. Point the mount's polar axis toward the South Celestial Pole
+2. The pole is near Sigma Octantis, but this star is faint
+
+### Step 3: Set Home Position
+
+Before powering on or after setup:
+1. Rotate the mount so the counterweight bar points straight down (toward the ground)
+2. The telescope/camera mounting platform should be roughly level
+
 ## Running the Mount Control System
 
 ### Step 1: Start the INDI Server
@@ -103,21 +130,59 @@ In a second terminal, set your observer location. This is required for Az/El coo
 
 The location is saved and will be remembered for future sessions.
 
-### Step 3: Verify the System is Ready
+### Step 3: Calibrate the Mount (Sync)
 
-Check the current mount status:
+The mount needs to know where it is currently pointing. Use the sync command to calibrate.
+
+**Option A: Sync to a Known Star (Most Accurate)**
+
+1. Manually point the mount at a bright star you can identify
+2. Look up the star's RA and DEC coordinates
+3. Sync the mount:
+
+```bash
+./point_mount.py sync-eq <RA_HOURS> <DEC_DEGREES>
+```
+
+**Example using Polaris (RA=2.53h, DEC=+89.26):**
+```bash
+# Point the mount at Polaris, then run:
+./point_mount.py sync-eq 2.53 89.26
+```
+
+**Option B: Sync to a Known Az/El Direction**
+
+If you know the exact Az/El you are pointing at (using a compass and inclinometer):
+
+```bash
+./point_mount.py sync <AZIMUTH> <ELEVATION>
+```
+
+**Example pointing due North at the horizon:**
+```bash
+./point_mount.py sync 0 0
+```
+
+**Option C: Sync to Polaris for Quick Northern Hemisphere Setup**
+
+Polaris is almost exactly at the North Celestial Pole (Az=0, Alt=latitude):
+
+```bash
+# Point at Polaris, then sync to your latitude as the altitude
+./point_mount.py sync 0 <YOUR_LATITUDE>
+```
+
+### Step 4: Verify Calibration
+
+After syncing, verify the mount knows its position:
 
 ```bash
 ./point_mount.py status
 ```
 
-This shows:
-- Connection status
-- Current location setting
-- Current pointing position (Az/El and RA/DEC)
-- Stepper motor positions
+The displayed Az/El should approximately match where the mount is physically pointing.
 
-### Step 4: Command the Mount to Point
+### Step 5: Command the Mount to Point
 
 To slew the mount to a specific Azimuth and Elevation:
 
@@ -153,11 +218,24 @@ The command will:
 |---------|-------------|
 | `./point_mount.py` | Show current position |
 | `./point_mount.py goto AZ EL` | Slew to Azimuth/Elevation coordinates |
-| `./point_mount.py goto-eq RA DEC` | Slew to RA (hours) / DEC (degrees) coordinates |
+| `./point_mount.py goto-eq RA DEC` | Slew to RA (hours) / DEC (degrees) |
+| `./point_mount.py sync AZ EL` | Calibrate: tell mount it is pointing at Az/El |
+| `./point_mount.py sync-eq RA DEC` | Calibrate: tell mount it is pointing at RA/DEC |
 | `./point_mount.py set-location LAT LON` | Set observer geographic location |
 | `./point_mount.py status` | Show detailed mount status |
 | `./point_mount.py track` | Live position display (Ctrl+C to stop) |
 | `./point_mount.py stop` | Emergency stop all motion |
+
+## Quick Start Checklist
+
+1. [ ] Install software: `./install_dependencies.sh`
+2. [ ] Connect and power on the mount
+3. [ ] Level the tripod
+4. [ ] Polar align the mount (point RA axis at Polaris)
+5. [ ] Start INDI server: `./start_server.sh`
+6. [ ] Set location: `./point_mount.py set-location LAT LON`
+7. [ ] Calibrate: Point at known star, run `./point_mount.py sync-eq RA DEC`
+8. [ ] Command: `./point_mount.py goto AZ EL`
 
 ## File Descriptions
 
@@ -190,6 +268,14 @@ Set your geographic location:
 1. Check that the INDI server is running
 2. Wait a few seconds for the mount to connect
 3. Run `python3 diagnose.py` to check the connection
+
+### Mount points to wrong location
+
+The mount needs calibration. Sync to a known reference:
+```bash
+# Point at a known star and sync
+./point_mount.py sync-eq <RA> <DEC>
+```
 
 ### Mount does not move
 

@@ -6,17 +6,26 @@ Controls the mount using INDI GoTo functionality for Az/El positioning.
 Both RA and DEC motors are controlled via the GoTo interface.
 
 Usage:
-    ./point_mount.py                    # Show current position
-    ./point_mount.py goto AZ EL         # Slew to Az/El coordinates
-    ./point_mount.py goto-eq RA DEC     # Slew to RA/DEC (hours, degrees)
-    ./point_mount.py set-location LAT LON  # Set geographic location
-    ./point_mount.py stop               # Emergency stop all motion
-    ./point_mount.py track              # Live position tracking display
-    ./point_mount.py status             # Show detailed mount status
+    ./point_mount.py                      # Show current position
+    ./point_mount.py goto AZ EL           # Slew to Az/El coordinates
+    ./point_mount.py goto-eq RA DEC       # Slew to RA/DEC (hours, degrees)
+    ./point_mount.py sync AZ EL           # Calibrate: "I am pointing at Az/El"
+    ./point_mount.py sync-eq RA DEC       # Calibrate: "I am pointing at RA/DEC"
+    ./point_mount.py set-location LAT LON # Set geographic location
+    ./point_mount.py stop                 # Emergency stop all motion
+    ./point_mount.py track                # Live position tracking display
+    ./point_mount.py status               # Show detailed mount status
 
-Example:
+Calibration Example:
+    # Point mount at Polaris, then sync to its coordinates
+    ./point_mount.py sync-eq 2.53 89.26
+
+    # Or sync using a known Az/El (e.g., pointing due North at horizon)
+    ./point_mount.py sync 0 0
+
+GoTo Example:
     ./point_mount.py set-location 36.17 -115.14   # Set to Las Vegas
-    ./point_mount.py goto 90 45                    # Point to Az=90°, El=45°
+    ./point_mount.py goto 90 45                    # Point to Az=90, El=45
 """
 import sys
 import time
@@ -318,6 +327,76 @@ def goto_equatorial(target_ra, target_dec):
         return False
 
 
+def sync_equatorial(sync_ra, sync_dec):
+    """Sync mount to known RA/DEC coordinates (calibration)."""
+    current_ra, current_dec = get_equatorial()
+    if current_ra is None:
+        print('ERROR: Cannot read position')
+        return False
+
+    print(f'Before sync: RA={current_ra:.3f}h  DEC={current_dec:+.2f}°')
+    print(f'Syncing to:  RA={sync_ra:.3f}h  DEC={sync_dec:+.2f}°')
+
+    # Set to SYNC mode and send coordinates
+    indi_set('ON_COORD_SET.SYNC', 'On')
+    time.sleep(0.1)
+
+    indi_set(f'EQUATORIAL_EOD_COORD.RA={sync_ra};DEC={sync_dec}')
+    time.sleep(0.5)
+
+    # Verify sync took effect
+    new_ra, new_dec = get_equatorial()
+    print(f'After sync:  RA={new_ra:.3f}h  DEC={new_dec:+.2f}°')
+
+    # Switch back to SLEW mode for future commands
+    indi_set('ON_COORD_SET.SLEW', 'On')
+
+    return True
+
+
+def sync_horizontal(sync_az, sync_alt):
+    """Sync mount to known Az/Alt coordinates (calibration)."""
+    config = load_config()
+    lat = config.get('lat')
+    if lat is None:
+        print('ERROR: Location not set.')
+        print('  Run: ./point_mount.py set-location LAT LON')
+        return False
+
+    current_az, current_alt = get_horizontal()
+    if current_az is None:
+        print('ERROR: Cannot read position')
+        return False
+
+    print(f'Before sync: Az={current_az:.1f}°  Alt={current_alt:+.1f}°')
+    print(f'Syncing to:  Az={sync_az:.1f}°  Alt={sync_alt:+.1f}°')
+
+    # Convert Az/Alt to RA/DEC
+    result = azalt_to_radec(sync_az, sync_alt, lat)
+    if result is None:
+        print('ERROR: Cannot convert coordinates')
+        return False
+
+    sync_ra, sync_dec = result
+    print(f'(Equivalent: RA={sync_ra:.2f}h  DEC={sync_dec:+.1f}°)')
+
+    # Set to SYNC mode and send coordinates
+    indi_set('ON_COORD_SET.SYNC', 'On')
+    time.sleep(0.1)
+
+    indi_set(f'EQUATORIAL_EOD_COORD.RA={sync_ra};DEC={sync_dec}')
+    time.sleep(0.5)
+
+    # Verify sync took effect
+    new_az, new_alt = get_horizontal()
+    print(f'After sync:  Az={new_az:.1f}°  Alt={new_alt:+.1f}°')
+
+    # Switch back to SLEW mode for future commands
+    indi_set('ON_COORD_SET.SLEW', 'On')
+
+    return True
+
+
 def show_status():
     """Show detailed mount status."""
     print('=== Mount Status ===\n')
@@ -427,6 +506,24 @@ def main():
             print('ERROR: RA and DEC must be numbers')
             return 1
         return 0 if goto_equatorial(target_ra, target_dec) else 1
+
+    elif args[0] == 'sync' and len(args) == 3:
+        try:
+            sync_az = float(args[1])
+            sync_alt = float(args[2])
+        except ValueError:
+            print('ERROR: AZ and ALT must be numbers')
+            return 1
+        return 0 if sync_horizontal(sync_az, sync_alt) else 1
+
+    elif args[0] == 'sync-eq' and len(args) == 3:
+        try:
+            sync_ra = float(args[1])
+            sync_dec = float(args[2])
+        except ValueError:
+            print('ERROR: RA and DEC must be numbers')
+            return 1
+        return 0 if sync_equatorial(sync_ra, sync_dec) else 1
 
     elif args[0] == 'track':
         print('Live position tracking. Press Ctrl+C to stop.\n')
