@@ -1,28 +1,34 @@
 # Star Adventurer GTi Mount Control
 
-Command a Sky-Watcher Star Adventurer GTi mount to point at specific Azimuth/Elevation coordinates using Python and INDI on Linux.
+Command one or multiple co-located Sky-Watcher Star Adventurer GTi mounts to point at specific Azimuth/Elevation coordinates using Python and INDI on Linux.
 
 ## Overview
 
-This system uses the INDI (Instrument Neutral Distributed Interface) protocol to communicate with the Star Adventurer GTi mount over USB. The mount's built-in GoTo functionality is used to slew both the RA and DEC axes to achieve the desired pointing direction.
+This system uses the INDI (Instrument Neutral Distributed Interface) protocol to communicate with Star Adventurer GTi mounts over USB. The mount's built-in GoTo functionality is used to slew both the RA and DEC axes to achieve the desired pointing direction.
 
-**Key Capability:** Point the mount to any Az/El coordinate in the sky by running:
+**Key Capabilities:**
+
+Single mount:
 ```bash
-./point_mount.py goto <AZIMUTH> <ELEVATION>
+./point_mount.py goto 90 45    # Point to Az=90, El=45
+```
+
+Multiple mounts (all point to same location):
+```bash
+./multi_mount.py goto 90 45    # All mounts point to Az=90, El=45
 ```
 
 ## Hardware Requirements
 
-- Sky-Watcher Star Adventurer GTi mount
-- 12V DC power supply for the mount
-- USB cable (Type-A to the mount's USB port)
+- One or more Sky-Watcher Star Adventurer GTi mounts
+- 12V DC power supply for each mount
+- USB cables (one per mount)
 - Linux computer (Ubuntu 22.04 or newer recommended)
+- USB hub (recommended for multiple mounts)
 
 ## Software Installation
 
 ### Step 1: Install Dependencies
-
-Run the installation script to install INDI drivers and required packages:
 
 ```bash
 chmod +x install_dependencies.sh
@@ -31,14 +37,12 @@ chmod +x install_dependencies.sh
 
 This installs:
 - INDI server and client tools
-- Star Adventurer GTi telescope driver (`indi_staradventurergti_telescope`)
+- Star Adventurer GTi telescope driver
 - Python 3.10
 
 **Important:** After installation, log out and log back in for serial port permissions to take effect.
 
 ### Step 2: Verify Installation
-
-Check that the INDI driver is installed:
 
 ```bash
 ls /usr/bin/indi_*telescope*
@@ -48,279 +52,265 @@ You should see `indi_staradventurergti_telescope` in the list.
 
 ## Hardware Setup
 
-### Connecting the Mount
+### Connecting the Mounts
 
-1. Connect the 12V power supply to the mount
-2. Connect the USB cable between the mount and your computer
-3. Power on the mount
+1. Connect 12V power to each mount
+2. Connect USB cable from each mount to the computer (use a powered USB hub for multiple mounts)
+3. Power on all mounts
 
-### Verifying the Connection
-
-Run the diagnostic tool to check that the mount is detected:
+### Verifying Connections
 
 ```bash
 python3 diagnose.py
 ```
 
-Expected output shows:
-- USB device detected at `/dev/ttyACM0` (or similar)
-- Device identified as "STM32 Virtual ComPort"
-
-If no device is found:
-- Check that the mount is powered on
-- Try a different USB cable or port
-- Verify the mount's power LED is on
+This shows:
+- Number of USB devices detected
+- Serial numbers for each mount
+- INDI connection status
 
 ## Physical Mount Alignment
 
-For accurate Az/El pointing, the mount must be physically aligned before use.
+For accurate Az/El pointing, each mount must be physically aligned.
 
-### Step 1: Level the Tripod
+### Step 1: Level the Tripod(s)
 
-Use a bubble level to ensure the tripod head is level. All three legs should be on stable ground.
+Use a bubble level to ensure each tripod is level.
 
 ### Step 2: Polar Alignment
 
-The Star Adventurer GTi is an equatorial mount. Its RA (Right Ascension) axis must point toward the celestial pole for accurate coordinate conversion.
+Each mount's RA axis must point toward the celestial pole.
 
 **Northern Hemisphere:**
-1. Point the mount's polar axis toward Polaris (the North Star)
-2. Set the latitude scale on the mount to match your latitude
-3. Use the polar scope (if equipped) for fine adjustment
-
-**Southern Hemisphere:**
-1. Point the mount's polar axis toward the South Celestial Pole
-2. The pole is near Sigma Octantis, but this star is faint
+1. Point the mount's polar axis toward Polaris
+2. Set the latitude scale to match your location
+3. Use the polar scope for fine adjustment
 
 ### Step 3: Set Home Position
 
-Before powering on or after setup:
-1. Rotate the mount so the counterweight bar points straight down (toward the ground)
-2. The telescope/camera mounting platform should be roughly level
+For each mount:
+1. Rotate so the counterweight bar points straight down
+2. The mounting platform should be roughly level
 
-## Running the Mount Control System
+## Single Mount Operation
 
-### Step 1: Start the INDI Server
+Use `point_mount.py` for controlling a single mount.
 
-Open a terminal and start the INDI server. This must remain running while you control the mount.
+### Start the INDI Server
 
 ```bash
 ./start_server.sh
 ```
 
-The server will output connection information. Wait a few seconds for the mount to connect automatically.
+Keep this terminal open.
 
-**Keep this terminal open.** The server must stay running.
-
-### Step 2: Set Your Geographic Location
-
-In a second terminal, set your observer location. This is required for Az/El coordinate conversion.
+### Set Location and Calibrate
 
 ```bash
-./point_mount.py set-location <LATITUDE> <LONGITUDE>
+./point_mount.py set-location 36.17 -115.14    # Your lat/lon
+./point_mount.py sync 0 45                      # Sync to known position
 ```
 
-**Example for Las Vegas:**
-```bash
-./point_mount.py set-location 36.17 -115.14
-```
-
-- Latitude: Positive for North, negative for South (-90 to +90)
-- Longitude: Positive for East, negative for West (-180 to +180)
-
-The location is saved and will be remembered for future sessions.
-
-### Step 3: Calibrate the Mount (Sync)
-
-The mount needs to know where it is currently pointing. Use the sync command to calibrate.
-
-**Option A: Sync to a Known Star (Most Accurate)**
-
-1. Manually point the mount at a bright star you can identify
-2. Look up the star's RA and DEC coordinates
-3. Sync the mount:
+### Command the Mount
 
 ```bash
-./point_mount.py sync-eq <RA_HOURS> <DEC_DEGREES>
+./point_mount.py goto 90 45    # Point to Az=90, El=45
 ```
 
-**Example using Polaris (RA=2.53h, DEC=+89.26):**
-```bash
-# Point the mount at Polaris, then run:
-./point_mount.py sync-eq 2.53 89.26
-```
+## Multi-Mount Operation
 
-**Option B: Sync to a Known Az/El Direction**
+Use `multi_mount.py` for controlling multiple co-located mounts.
 
-If you know the exact Az/El you are pointing at (using a compass and inclinometer):
+### Start the INDI Server for Multiple Mounts
 
 ```bash
-./point_mount.py sync <AZIMUTH> <ELEVATION>
+./start_server.sh 4    # Start with 4 mount instances
 ```
 
-**Example pointing due North at the horizon:**
+Or let it auto-detect:
 ```bash
-./point_mount.py sync 0 0
+./start_server.sh      # Auto-detects number of connected mounts
 ```
 
-**Option C: Sync to Polaris for Quick Northern Hemisphere Setup**
+Mounts will appear as "Mount 1", "Mount 2", etc.
 
-Polaris is almost exactly at the North Celestial Pole (Az=0, Alt=latitude):
-
-```bash
-# Point at Polaris, then sync to your latitude as the altitude
-./point_mount.py sync 0 <YOUR_LATITUDE>
-```
-
-### Step 4: Verify Calibration
-
-After syncing, verify the mount knows its position:
+### Check Status
 
 ```bash
-./point_mount.py status
+./multi_mount.py status
 ```
 
-The displayed Az/El should approximately match where the mount is physically pointing.
+Shows all discovered mounts and their connection status.
 
-### Step 5: Command the Mount to Point
+### Set Location (Shared by All Mounts)
 
-To slew the mount to a specific Azimuth and Elevation:
+Since mounts are co-located, they share the same geographic location:
 
 ```bash
-./point_mount.py goto <AZIMUTH> <ELEVATION>
+./multi_mount.py set-location 36.17 -115.14
 ```
 
-**Coordinate System:**
-- Azimuth: 0 to 360 degrees (0 = North, 90 = East, 180 = South, 270 = West)
-- Elevation: -90 to +90 degrees (0 = horizon, 90 = zenith)
+### Calibrate Each Mount
 
-**Examples:**
+Each mount needs to be calibrated individually. Point each mount at a known reference and sync:
+
 ```bash
-# Point due East, 45 degrees above horizon
-./point_mount.py goto 90 45
+# Calibrate Mount 1
+./multi_mount.py sync 0 45 --mount 1
 
-# Point South, 30 degrees above horizon
-./point_mount.py goto 180 30
+# Calibrate Mount 2
+./multi_mount.py sync 0 45 --mount 2
 
-# Point to zenith (straight up)
-./point_mount.py goto 0 90
+# Calibrate Mount 3
+./multi_mount.py sync 0 45 --mount 3
+
+# etc.
 ```
 
-The command will:
-1. Display the current and target positions
-2. Convert Az/El to RA/DEC coordinates
-3. Slew the mount (showing real-time position updates)
-4. Report the final achieved position
+### Command All Mounts to Same Position
+
+```bash
+./multi_mount.py goto 90 45    # All mounts slew to Az=90, El=45
+```
+
+The mounts slew in parallel and the command waits for all to complete.
+
+### Command a Specific Mount
+
+```bash
+./multi_mount.py goto 90 45 --mount 2    # Only Mount 2 slews
+```
+
+### Emergency Stop
+
+```bash
+./multi_mount.py stop    # Stops ALL mounts immediately
+```
 
 ## Command Reference
+
+### Single Mount (point_mount.py)
 
 | Command | Description |
 |---------|-------------|
 | `./point_mount.py` | Show current position |
-| `./point_mount.py goto AZ EL` | Slew to Azimuth/Elevation coordinates |
-| `./point_mount.py goto-eq RA DEC` | Slew to RA (hours) / DEC (degrees) |
-| `./point_mount.py sync AZ EL` | Calibrate: tell mount it is pointing at Az/El |
-| `./point_mount.py sync-eq RA DEC` | Calibrate: tell mount it is pointing at RA/DEC |
-| `./point_mount.py set-location LAT LON` | Set observer geographic location |
-| `./point_mount.py status` | Show detailed mount status |
-| `./point_mount.py track` | Live position display (Ctrl+C to stop) |
-| `./point_mount.py stop` | Emergency stop all motion |
+| `./point_mount.py goto AZ EL` | Slew to Az/El coordinates |
+| `./point_mount.py sync AZ EL` | Calibrate mount |
+| `./point_mount.py set-location LAT LON` | Set location |
+| `./point_mount.py status` | Show detailed status |
+| `./point_mount.py stop` | Emergency stop |
+
+### Multiple Mounts (multi_mount.py)
+
+| Command | Description |
+|---------|-------------|
+| `./multi_mount.py` | Show status of all mounts |
+| `./multi_mount.py goto AZ EL` | Slew ALL mounts to Az/El |
+| `./multi_mount.py goto AZ EL --mount N` | Slew only Mount N |
+| `./multi_mount.py sync AZ EL` | Sync ALL mounts |
+| `./multi_mount.py sync AZ EL --mount N` | Sync only Mount N |
+| `./multi_mount.py set-location LAT LON` | Set location (all mounts) |
+| `./multi_mount.py assign` | Interactive port assignment |
+| `./multi_mount.py stop` | Emergency stop ALL mounts |
 
 ## Quick Start Checklist
 
-1. [ ] Install software: `./install_dependencies.sh`
-2. [ ] Connect and power on the mount
-3. [ ] Level the tripod
-4. [ ] Polar align the mount (point RA axis at Polaris)
-5. [ ] Start INDI server: `./start_server.sh`
-6. [ ] Set location: `./point_mount.py set-location LAT LON`
-7. [ ] Calibrate: Point at known star, run `./point_mount.py sync-eq RA DEC`
-8. [ ] Command: `./point_mount.py goto AZ EL`
+### Single Mount
+
+1. [ ] Install: `./install_dependencies.sh`
+2. [ ] Connect and power mount
+3. [ ] Level tripod, polar align
+4. [ ] Start server: `./start_server.sh`
+5. [ ] Set location: `./point_mount.py set-location LAT LON`
+6. [ ] Calibrate: `./point_mount.py sync AZ EL`
+7. [ ] Command: `./point_mount.py goto AZ EL`
+
+### Multiple Mounts
+
+1. [ ] Install: `./install_dependencies.sh`
+2. [ ] Connect and power all mounts
+3. [ ] Level tripods, polar align each mount
+4. [ ] Start server: `./start_server.sh N` (N = number of mounts)
+5. [ ] Check status: `./multi_mount.py status`
+6. [ ] Set location: `./multi_mount.py set-location LAT LON`
+7. [ ] Calibrate each: `./multi_mount.py sync AZ EL --mount 1` (repeat for each)
+8. [ ] Command all: `./multi_mount.py goto AZ EL`
 
 ## File Descriptions
 
 | File | Purpose |
 |------|---------|
-| `point_mount.py` | Main mount control script |
-| `start_server.sh` | Starts the INDI server |
+| `point_mount.py` | Single mount control |
+| `multi_mount.py` | Multiple mount control |
+| `start_server.sh` | Starts INDI server (single or multi) |
 | `install_dependencies.sh` | Installs required software |
-| `diagnose.py` | Diagnostic tool for troubleshooting |
-| `.mount_config.json` | Stores your location setting (auto-created) |
+| `diagnose.py` | Diagnostic tool |
+| `.mount_config.json` | Single mount config |
+| `.multi_mount_config.json` | Multi-mount config |
 
 ## Troubleshooting
 
-### "INDI server not running"
+### Mounts not detected
 
-Start the server in a separate terminal:
 ```bash
-./start_server.sh
+python3 diagnose.py
 ```
 
-### "Location not set"
+Check:
+- All mounts powered on
+- USB cables connected
+- Try different USB ports
 
-Set your geographic location:
+### Mounts connect to wrong ports
+
+Use the assign command to manually assign ports:
 ```bash
-./point_mount.py set-location <LAT> <LON>
+./multi_mount.py assign
 ```
 
-### "Cannot read position"
+### One mount points wrong direction
 
-1. Check that the INDI server is running
-2. Wait a few seconds for the mount to connect
-3. Run `python3 diagnose.py` to check the connection
-
-### Mount points to wrong location
-
-The mount needs calibration. Sync to a known reference:
+Recalibrate that specific mount:
 ```bash
-# Point at a known star and sync
-./point_mount.py sync-eq <RA> <DEC>
+./multi_mount.py sync AZ EL --mount N
 ```
-
-### Mount does not move
-
-1. Check that the mount is powered on (12V)
-2. Verify USB connection with `python3 diagnose.py`
-3. Restart the INDI server: stop it with Ctrl+C, then run `./start_server.sh` again
-4. Check for obstructions or mechanical limits
-
-### "No USB serial devices found"
-
-1. Verify the mount is powered on
-2. Check the USB cable connection
-3. Try a different USB port
-4. Check `dmesg | tail -20` for USB connection errors
 
 ### Permission denied on serial port
 
-Add your user to the dialout group and log out/in:
 ```bash
 sudo usermod -a -G dialout $USER
 ```
-Then log out and log back in.
+Then log out and back in.
+
+### INDI server not running
+
+```bash
+./start_server.sh    # Single mount
+./start_server.sh 4  # Four mounts
+```
 
 ## Technical Details
 
-### Communication Protocol
+### Mount Naming
 
-The system uses INDI (Instrument Neutral Distributed Interface) to communicate with the mount. The `indi_staradventurergti_telescope` driver handles the low-level serial communication.
+- Single mount mode: "Star Adventurer GTi"
+- Multi-mount mode: "Mount 1", "Mount 2", etc.
 
-### Coordinate Conversion
+### USB Identification
 
-When you specify Az/El coordinates, the script:
-1. Gets the current Local Sidereal Time (LST) from the INDI driver
-2. Converts Az/El to Hour Angle and Declination using spherical trigonometry
-3. Calculates Right Ascension from LST and Hour Angle
-4. Sends RA/DEC coordinates to the mount's GoTo system
+Each mount has a unique USB serial number. The system auto-detects connected mounts by scanning `/dev/ttyACM*` devices.
 
-### Motor Specifications
+### Parallel Operation
 
-- RA axis: 3,628,800 steps per 360 degrees
-- DEC axis: 2,903,040 steps per 360 degrees
-- Both axes slew at approximately 800x sidereal rate during GoTo
+When commanding multiple mounts, GoTo commands are sent in parallel using thread pools. The system waits for all mounts to complete before returning.
+
+### Coordinate System
+
+- Azimuth: 0-360 degrees (0=North, 90=East, 180=South, 270=West)
+- Elevation: -90 to +90 degrees (0=horizon, 90=zenith)
 
 ## Stopping the System
 
-1. Stop any running GoTo: `./point_mount.py stop`
-2. Stop the INDI server: Press Ctrl+C in the server terminal
-3. Power off the mount
+1. Stop all mounts: `./multi_mount.py stop`
+2. Stop INDI server: Ctrl+C in server terminal
+3. Power off mounts
