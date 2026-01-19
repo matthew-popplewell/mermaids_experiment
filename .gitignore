@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Claude Code
+.claude/
+
+# Mount config (contains location data)
+.mount_config.json
+.mount_calibration.json
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
