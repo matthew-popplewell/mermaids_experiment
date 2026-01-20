@@ -1,0 +1,3 @@
+[submodule "asi_driver"]
+	path = asi_driver
+	url = https://github.com/travelingspaceman/asi_driver.git

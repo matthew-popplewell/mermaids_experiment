@@ -25,6 +25,7 @@ Multiple mounts (all point to same location):
 - USB cables (one per mount)
 - Linux computer (Ubuntu 22.04 or newer recommended)
 - USB hub (recommended for multiple mounts)
+- USB GPS receiver (optional, for automatic location detection)
 
 ## Software Installation
 
@@ -39,6 +40,7 @@ This installs:
 - INDI server and client tools
 - Star Adventurer GTi telescope driver
 - Python 3.10
+- GPS support (pyserial, pynmea2 for direct serial connection)
 
 **Important:** After installation, log out and log back in for serial port permissions to take effect.
 
@@ -106,8 +108,20 @@ Keep this terminal open.
 
 ### Set Location and Calibrate
 
+Set location manually:
 ```bash
 ./point_mount.py set-location 36.17 -115.14    # Your lat/lon
+```
+
+Or use a USB GPS receiver for automatic location (connects directly, no daemon required):
+```bash
+./point_mount.py gps-location                   # Auto-detect GPS and read location
+./point_mount.py gps-location --wait 60         # Longer timeout if needed
+./point_mount.py gps-location --port /dev/ttyUSB0  # Specify GPS port manually
+```
+
+Then calibrate:
+```bash
 ./point_mount.py sync 0 45                      # Sync to known position
 ```
 
@@ -144,10 +158,17 @@ Shows all discovered mounts and their connection status.
 
 ### Set Location (Shared by All Mounts)
 
-Since mounts are co-located, they share the same geographic location:
+Since mounts are co-located, they share the same geographic location.
 
+Set manually:
 ```bash
 ./multi_mount.py set-location 36.17 -115.14
+```
+
+Or use GPS (connects directly, no daemon required):
+```bash
+./multi_mount.py gps-location                   # Auto-detect GPS and read location
+./multi_mount.py gps-location --port /dev/ttyUSB0  # Specify GPS port manually
 ```
 
 ### Calibrate Each Mount
@@ -196,7 +217,10 @@ The mounts slew in parallel and the command waits for all to complete.
 | `./point_mount.py` | Show current position |
 | `./point_mount.py goto AZ EL` | Slew to Az/El coordinates |
 | `./point_mount.py sync AZ EL` | Calibrate mount |
-| `./point_mount.py set-location LAT LON` | Set location |
+| `./point_mount.py set-location LAT LON` | Set location manually |
+| `./point_mount.py gps-location` | Set location from GPS |
+| `./point_mount.py gps-location --wait N` | GPS with N second timeout |
+| `./point_mount.py gps-location --port DEV` | GPS with specific port |
 | `./point_mount.py status` | Show detailed status |
 | `./point_mount.py stop` | Emergency stop |
 
@@ -209,7 +233,9 @@ The mounts slew in parallel and the command waits for all to complete.
 | `./multi_mount.py goto AZ EL --mount N` | Slew only Mount N |
 | `./multi_mount.py sync AZ EL` | Sync ALL mounts |
 | `./multi_mount.py sync AZ EL --mount N` | Sync only Mount N |
-| `./multi_mount.py set-location LAT LON` | Set location (all mounts) |
+| `./multi_mount.py set-location LAT LON` | Set location manually |
+| `./multi_mount.py gps-location` | Set location from GPS |
+| `./multi_mount.py gps-location --port DEV` | GPS with specific port |
 | `./multi_mount.py assign` | Interactive port assignment |
 | `./multi_mount.py stop` | Emergency stop ALL mounts |
 
@@ -242,6 +268,7 @@ The mounts slew in parallel and the command waits for all to complete.
 |------|---------|
 | `point_mount.py` | Single mount control |
 | `multi_mount.py` | Multiple mount control |
+| `gps_serial.py` | Direct serial GPS reader |
 | `start_server.sh` | Starts INDI server (single or multi) |
 | `install_dependencies.sh` | Installs required software |
 | `diagnose.py` | Diagnostic tool |
@@ -287,6 +314,35 @@ Then log out and back in.
 ```bash
 ./start_server.sh    # Single mount
 ./start_server.sh 4  # Four mounts
+```
+
+### GPS not working
+
+**GPS not detected:**
+```bash
+# List available serial ports
+ls -la /dev/ttyUSB* /dev/ttyACM*
+
+# Try specifying the port manually
+./point_mount.py gps-location --port /dev/ttyUSB0
+./point_mount.py gps-location --port /dev/ttyACM0
+```
+
+**Permission denied:**
+```bash
+# Add user to dialout group
+sudo usermod -a -G dialout $USER
+# Then log out and back in
+```
+
+**No satellite fix:**
+- Move to a location with clear sky view
+- Wait longer: `./point_mount.py gps-location --wait 120`
+- GPS receivers can take several minutes to get first fix
+
+**Missing Python packages:**
+```bash
+pip install pyserial pynmea2
 ```
 
 ## Technical Details

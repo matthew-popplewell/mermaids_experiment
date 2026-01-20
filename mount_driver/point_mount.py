@@ -12,6 +12,8 @@ Usage:
     ./point_mount.py sync AZ EL           # Calibrate: "I am pointing at Az/El"
     ./point_mount.py sync-eq RA DEC       # Calibrate: "I am pointing at RA/DEC"
     ./point_mount.py set-location LAT LON # Set geographic location
+    ./point_mount.py gps-location         # Get location from GPS receiver
+    ./point_mount.py gps-location --port /dev/ttyUSB0  # Specify GPS port
     ./point_mount.py stop                 # Emergency stop all motion
     ./point_mount.py track                # Live position tracking display
     ./point_mount.py status               # Show detailed mount status
@@ -488,6 +490,68 @@ def main():
         setup_location(lat, lon)
         print(f'Location set: Lat={lat}° Lon={lon}°')
         return 0
+
+    elif args[0] == 'gps-location':
+        # Parse optional --wait argument
+        timeout = 30
+        if '--wait' in args:
+            idx = args.index('--wait')
+            if idx + 1 < len(args):
+                try:
+                    timeout = int(args[idx + 1])
+                except ValueError:
+                    print('ERROR: --wait requires a number (seconds)')
+                    return 1
+
+        # Parse optional --port argument
+        port = None
+        if '--port' in args:
+            idx = args.index('--port')
+            if idx + 1 < len(args):
+                port = args[idx + 1]
+
+        # Import GPS module (direct serial connection)
+        try:
+            from gps_serial import (
+                get_gps_location, gps_available, format_location,
+                GPSNotAvailable, FixTimeoutError
+            )
+        except ImportError:
+            print('ERROR: GPS libraries not installed.')
+            print('  Run: pip install pyserial pynmea2')
+            return 1
+
+        print(f'Reading GPS location (timeout: {timeout}s)...')
+
+        def progress(sats, status):
+            print(f'\r  {status} ({sats} satellites)   ', end='', flush=True)
+
+        try:
+            location = get_gps_location(timeout=timeout, port=port, progress_callback=progress)
+            print('\n')
+            print(format_location(location))
+            print()
+
+            # Save location
+            setup_location(location['lat'], location['lon'])
+            print('Location saved to config.')
+            return 0
+
+        except GPSNotAvailable as e:
+            print(f'\n\nERROR: {e}')
+            print('\nTroubleshooting:')
+            print('  1. Connect USB GPS receiver')
+            print('  2. Check device: ls /dev/ttyUSB* /dev/ttyACM*')
+            print('  3. Check permissions: sudo usermod -a -G dialout $USER')
+            print('  4. Specify port manually: ./point_mount.py gps-location --port /dev/ttyUSB0')
+            return 1
+
+        except FixTimeoutError as e:
+            print(f'\n\nERROR: {e}')
+            print('\nGPS has no satellite fix. Try:')
+            print('  - Move to a location with clear sky view')
+            print('  - Wait longer: ./point_mount.py gps-location --wait 120')
+            return 1
 
     elif args[0] == 'goto' and len(args) == 3:
         try:
