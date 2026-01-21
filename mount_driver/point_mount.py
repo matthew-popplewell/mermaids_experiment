@@ -43,7 +43,7 @@ STEPS_PER_360_RA = 3628800.0   # Axis 1 (RA)
 STEPS_PER_360_DEC = 2903040.0  # Axis 2 (Dec)
 
 TOLERANCE_DEG = 0.5
-GOTO_TIMEOUT = 300  # 5 minutes max for GoTo
+GOTO_TIMEOUT = 120  # 5 minutes max for GoTo
 
 
 def indi_get(prop):

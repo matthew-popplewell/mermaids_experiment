@@ -5,6 +5,8 @@
 #   ./start_server.sh          # Auto-detect and start all connected mounts
 #   ./start_server.sh 1        # Start with 1 mount instance
 #   ./start_server.sh 4        # Start with 4 mount instances
+#
+# The server starts, then automatically connects all mounts.
 
 set -e
 
@@ -29,16 +31,51 @@ fi
 echo "Starting INDI Server for $NUM_MOUNTS mount(s)..."
 
 # Build the indiserver command with named driver instances
-CMD="indiserver -v"
-for i in $(seq 1 $NUM_MOUNTS); do
-    CMD="$CMD indi_staradventurergti_telescope -n \"Mount $i\""
-done
+if [ "$NUM_MOUNTS" -eq 1 ]; then
+    # Single mount mode - use default device name
+    CMD="indiserver -v indi_staradventurergti_telescope"
+    DEVICE_NAME="Star Adventurer GTi"
+else
+    # Multi-mount mode - use named instances
+    CMD="indiserver -v"
+    for i in $(seq 1 $NUM_MOUNTS); do
+        CMD="$CMD indi_staradventurergti_telescope -n \"Mount $i\""
+    done
+    DEVICE_NAME="Mount"
+fi
 
 echo "Command: $CMD"
 echo ""
-echo "Mounts will appear as: Mount 1, Mount 2, etc."
-echo "Use './multi_mount.py status' to check connections"
+
+# Start server in background
+eval $CMD &
+SERVER_PID=$!
+
+# Wait for server to be ready
+echo "Waiting for INDI server to initialize..."
+sleep 3
+
+# Auto-connect all mounts
+echo "Connecting mounts..."
+if [ "$NUM_MOUNTS" -eq 1 ]; then
+    indi_setprop "Star Adventurer GTi.CONNECTION.CONNECT=On" 2>/dev/null && echo "  Connected: Star Adventurer GTi" || echo "  Warning: Could not connect mount"
+else
+    for i in $(seq 1 $NUM_MOUNTS); do
+        indi_setprop "Mount $i.CONNECTION.CONNECT=On" 2>/dev/null && echo "  Connected: Mount $i" || echo "  Warning: Could not connect Mount $i"
+        sleep 1
+    done
+fi
+
+echo ""
+echo "Server running (PID: $SERVER_PID)"
+if [ "$NUM_MOUNTS" -eq 1 ]; then
+    echo "Use './point_mount.py' for single mount control"
+else
+    echo "Mounts appear as: Mount 1, Mount 2, etc."
+    echo "Use './multi_mount.py status' to check connections"
+fi
+echo "Press Ctrl+C to stop"
 echo ""
 
-# Run the server (this blocks)
-eval $CMD
+# Wait for server (brings it to foreground for Ctrl+C)
+wait $SERVER_PID
