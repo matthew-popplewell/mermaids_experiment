@@ -18,6 +18,12 @@ Multiple mounts (all point to same location):
 ./multi_mount.py goto 90 45    # All mounts point to Az=90, El=45
 ```
 
+Automatic calibration via plate solving (requires camera):
+```bash
+./calibrate.py                 # Calibrate mount using camera plate solving
+./calibrate.py --all           # Calibrate all mounts automatically
+```
+
 ## Hardware Requirements
 
 - One or more Sky-Watcher Star Adventurer GTi mounts
@@ -208,6 +214,65 @@ The mounts slew in parallel and the command waits for all to complete.
 ./multi_mount.py stop    # Stops ALL mounts immediately
 ```
 
+## Automatic Calibration via Plate Solving
+
+Use `calibrate.py` to automatically calibrate mount pointing using a camera and plate solving. This eliminates the need to manually sync to known star positions.
+
+**Requirements:**
+- ZWO ASI camera connected via USB
+- tetra3 plate solving database (see `asi_driver/` for setup)
+- Clear view of the night sky with visible stars
+
+### How It Works
+
+1. Camera captures a high-quality image of the current sky
+2. tetra3 identifies star patterns and determines exact RA/DEC coordinates
+3. Mount syncs its internal position to match the plate solution
+4. GoTo commands now accurately slew to any target
+
+### Basic Calibration
+
+```bash
+./calibrate.py                    # Calibrate mount 1 with camera 0
+./calibrate.py --mount 2          # Calibrate mount 2
+./calibrate.py --camera CAM_1     # Use camera with ID "CAM_1"
+```
+
+### Verify Calibration
+
+Check pointing accuracy without syncing:
+```bash
+./calibrate.py --verify           # Reports pointing error in arcminutes
+```
+
+### Calibrate All Mounts
+
+```bash
+./calibrate.py --all              # Calibrate all discovered mounts
+```
+
+By default, camera index N-1 is paired with mount N (camera 0 -> mount 1, etc.).
+
+### Camera Settings
+
+Adjust exposure, gain, and field of view estimate for your setup:
+```bash
+./calibrate.py --exposure 1.0 --gain 100 --fov 8.0
+```
+
+### Dry Run
+
+See what would happen without actually syncing:
+```bash
+./calibrate.py --dry-run
+```
+
+### List Connected Cameras
+
+```bash
+./calibrate.py --list-cameras
+```
+
 ## Command Reference
 
 ### Single Mount (point_mount.py)
@@ -239,6 +304,22 @@ The mounts slew in parallel and the command waits for all to complete.
 | `./multi_mount.py assign` | Interactive port assignment |
 | `./multi_mount.py stop` | Emergency stop ALL mounts |
 
+### Plate Solving Calibration (calibrate.py)
+
+| Command | Description |
+|---------|-------------|
+| `./calibrate.py` | Calibrate mount 1 with camera 0 |
+| `./calibrate.py --mount N` | Calibrate mount N |
+| `./calibrate.py --camera ID` | Use camera with specific ID |
+| `./calibrate.py --camera-index N` | Use camera at index N |
+| `./calibrate.py --verify` | Check calibration without syncing |
+| `./calibrate.py --all` | Calibrate all mounts |
+| `./calibrate.py --exposure S` | Set exposure time (seconds) |
+| `./calibrate.py --gain G` | Set camera gain |
+| `./calibrate.py --fov D` | Set FOV estimate (degrees) |
+| `./calibrate.py --dry-run` | Show what would happen |
+| `./calibrate.py --list-cameras` | List connected cameras |
+
 ## Quick Start Checklist
 
 ### Single Mount
@@ -247,9 +328,10 @@ The mounts slew in parallel and the command waits for all to complete.
 2. [ ] Connect and power mount
 3. [ ] Level tripod, polar align
 4. [ ] Start server: `./start_server.sh`
-5. [ ] Set location: `./point_mount.py set-location LAT LON`
-6. [ ] Calibrate: `./point_mount.py sync AZ EL`
-7. [ ] Command: `./point_mount.py goto AZ EL`
+5. [ ] Set location: `./point_mount.py gps-location` (or `set-location LAT LON`)
+6. [ ] Calibrate: `./calibrate.py` (automatic) or `./point_mount.py sync AZ EL` (manual)
+7. [ ] Verify: `./calibrate.py --verify` (optional)
+8. [ ] Command: `./point_mount.py goto AZ EL`
 
 ### Multiple Mounts
 
@@ -258,9 +340,10 @@ The mounts slew in parallel and the command waits for all to complete.
 3. [ ] Level tripods, polar align each mount
 4. [ ] Start server: `./start_server.sh N` (N = number of mounts)
 5. [ ] Check status: `./multi_mount.py status`
-6. [ ] Set location: `./multi_mount.py set-location LAT LON`
-7. [ ] Calibrate each: `./multi_mount.py sync AZ EL --mount 1` (repeat for each)
-8. [ ] Command all: `./multi_mount.py goto AZ EL`
+6. [ ] Set location: `./multi_mount.py gps-location` (or `set-location LAT LON`)
+7. [ ] Calibrate: `./calibrate.py --all` (automatic) or sync each manually
+8. [ ] Verify: `./calibrate.py --verify --mount N` (optional, for each mount)
+9. [ ] Command all: `./multi_mount.py goto AZ EL`
 
 ## File Descriptions
 
@@ -268,6 +351,7 @@ The mounts slew in parallel and the command waits for all to complete.
 |------|---------|
 | `point_mount.py` | Single mount control |
 | `multi_mount.py` | Multiple mount control |
+| `calibrate.py` | Automatic calibration via plate solving |
 | `gps_serial.py` | Direct serial GPS reader |
 | `start_server.sh` | Starts INDI server (single or multi) |
 | `install_dependencies.sh` | Installs required software |
@@ -344,6 +428,29 @@ sudo usermod -a -G dialout $USER
 ```bash
 pip install pyserial pynmea2
 ```
+
+### Plate solving not working
+
+**Camera not found:**
+```bash
+# List connected cameras
+./calibrate.py --list-cameras
+
+# Check USB connection
+lsusb | grep -i zwo
+```
+
+**Plate solve fails:**
+- Ensure clear sky with visible stars (not cloudy)
+- Try longer exposure: `./calibrate.py --exposure 2.0`
+- Try higher gain: `./calibrate.py --gain 200`
+- Adjust FOV estimate: `./calibrate.py --fov 8.0`
+- Check tetra3 database is generated (see `asi_driver/` README)
+
+**Large pointing error after calibration:**
+- Verify with: `./calibrate.py --verify`
+- If error > 30 arcmin, recalibrate
+- Check polar alignment
 
 ## Technical Details
 
