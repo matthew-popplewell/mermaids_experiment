@@ -9,13 +9,31 @@ Control one or multiple Sky-Watcher Star Adventurer GTi mounts via INDI on Linux
 ```
 
 ## Installation
-If you need to install drivers/dependencies, this will need to be done with internet access.
 
+### Online Installation (Recommended)
 ```bash
 ./install_dependencies.sh
 ```
 
-Log out and back in for serial port permissions to take effect.
+### Offline Installation
+For machines without internet access, use the two-step process:
+
+1. **On an internet-connected machine** (same Ubuntu version and architecture):
+   ```bash
+   ./prepare_offline_packages.sh
+   ```
+
+2. **Copy the entire project** (including `offline_packages/`) to the offline machine
+
+3. **On the offline machine**:
+   ```bash
+   ./install_dependencies.sh --offline
+   ```
+
+See [docs/OFFLINE_INSTALLATION.md](../docs/OFFLINE_INSTALLATION.md) for detailed instructions.
+
+### After Installation
+source .venv/bin/activate
 
 ## Hardware Setup
 
@@ -49,7 +67,7 @@ udevadm info --query=property --name=/dev/ttyACM0 | grep ID_SERIAL_SHORT
 ```python
 my_serials = {
     'mount1': '4E9841685300',
-    'mount2': 'ABC123DEF456',
+    'mount2': '4EA9413D5700',
 }
 ```
 
@@ -75,7 +93,9 @@ Keep this terminal open. Single mount appears as "Star Adventurer GTi"; multiple
 
 ```bash
 ./point_mount.py set-location 36.17 -115.14   # Manual
-./point_mount.py gps-location                  # From USB GPS
+./multi_mount.py set-location 36.17 -115.14
+./point_mount.py gps-location                # From USB GPS
+./multi_mount.py gps-location
 ```
 
 ### Calibrate

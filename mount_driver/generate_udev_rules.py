@@ -16,7 +16,7 @@ if __name__ == '__main__':
     # Update these serials as you receive your mounts
     my_serials = {
         'mount1': '4E9841685300',
-        'mount2': 'YOUR_SERIAL_2',
+        'mount2': '4EA9413D5700',
         'mount3': 'YOUR_SERIAL_3',
         'mount4': 'YOUR_SERIAL_4'
     }
