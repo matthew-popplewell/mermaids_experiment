@@ -66,8 +66,10 @@ udevadm info --query=property --name=/dev/ttyACM0 | grep ID_SERIAL_SHORT
 1. Edit `generate_udev_rules.py` with your serial numbers:
 ```python
 my_serials = {
-    'mount1': '4E9841685300',
-    'mount2': '4EA9413D5700',
+   'mount1': '4E9841685300',
+   'mount2': '4EA9413D5700',
+   'mount3': '4E89414B5300',
+   'mount4': '4EBC41595300'
 }
 ```
 

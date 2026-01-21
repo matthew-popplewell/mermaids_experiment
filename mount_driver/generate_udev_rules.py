@@ -17,7 +17,7 @@ if __name__ == '__main__':
     my_serials = {
         'mount1': '4E9841685300',
         'mount2': '4EA9413D5700',
-        'mount3': 'YOUR_SERIAL_3',
-        'mount4': 'YOUR_SERIAL_4'
+        'mount3': '4E89414B5300',
+        'mount4': '4EBC41595300'
     }
     generate_udev_rules(my_serials)

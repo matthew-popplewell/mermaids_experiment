@@ -21,6 +21,7 @@ Example:
     ./start_server.sh                       # Start INDI server (auto-detects mounts)
     ./multi_mount.py connect                # Connect all mounts to ports
     ./multi_mount.py set-location 36.17 -115.14
+    ./multi_mount.py sync 0 45
     ./multi_mount.py goto 90 45             # All mounts point to Az=90, El=45
 """
 import sys
