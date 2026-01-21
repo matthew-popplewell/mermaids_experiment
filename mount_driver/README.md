@@ -9,6 +9,7 @@ Control one or multiple Sky-Watcher Star Adventurer GTi mounts via INDI on Linux
 ```
 
 ## Installation
+If you need to install drivers/dependencies, this will need to be done with internet access.
 
 ```bash
 ./install_dependencies.sh
@@ -24,7 +25,7 @@ Log out and back in for serial port permissions to take effect.
 ### Physical Alignment
 
 1. Level the tripod with a bubble level
-2. Point RA axis toward Polaris (northern hemisphere)
+2. Point RA axis toward Polaris (northern hemisphere). Polar align mount manually (refer to physical user guide or SynScan Pro app).
 3. Set home position: counterweight bar pointing down
 
 ## udev Rules (Recommended for Multiple Mounts)
