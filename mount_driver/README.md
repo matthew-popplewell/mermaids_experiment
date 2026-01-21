@@ -89,6 +89,9 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Keep this terminal open. Single mount appears as "Star Adventurer GTi"; multiple mounts as "Mount 1", "Mount 2", etc.
 
+### Double check connection
+./multi_mount.py connect
+
 ### Set Location
 
 ```bash
@@ -110,6 +113,7 @@ Keep this terminal open. Single mount appears as "Star Adventurer GTi"; multiple
 **Option 2: Manual sync**
 ```bash
 ./point_mount.py sync 0 45              # Single mount
+./multi_mount.py sync 0 45              # All mounts (parallel)
 ./multi_mount.py sync 0 45 --mount 1    # Specific mount
 ```
 

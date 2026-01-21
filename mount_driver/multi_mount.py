@@ -6,21 +6,21 @@ Controls multiple co-located mounts to point at the same Az/El coordinates.
 All mounts share the same geographic location.
 
 Usage:
-    ./multi_mount.py                        # Show status of all mounts
+    ./multi_mount.py status                 # Show status of all mounts
+    ./multi_mount.py connect                # Auto-connect all mounts to ports
     ./multi_mount.py goto AZ EL             # Slew ALL mounts to Az/El
     ./multi_mount.py goto AZ EL --mount 1   # Slew only Mount 1
     ./multi_mount.py sync AZ EL             # Sync ALL mounts to Az/El
     ./multi_mount.py sync AZ EL --mount 2   # Sync only Mount 2
     ./multi_mount.py set-location LAT LON   # Set location (shared by all)
     ./multi_mount.py gps-location           # Get location from GPS receiver
-    ./multi_mount.py gps-location --port /dev/ttyUSB0  # Specify GPS port
     ./multi_mount.py assign                 # Interactive mount assignment
     ./multi_mount.py stop                   # Emergency stop ALL mounts
 
 Example:
+    ./start_server.sh                       # Start INDI server (auto-detects mounts)
+    ./multi_mount.py connect                # Connect all mounts to ports
     ./multi_mount.py set-location 36.17 -115.14
-    ./multi_mount.py sync 0 45 --mount 1    # Calibrate mount 1
-    ./multi_mount.py sync 0 45 --mount 2    # Calibrate mount 2
     ./multi_mount.py goto 90 45             # All mounts point to Az=90, El=45
 """
 import sys
@@ -397,6 +397,64 @@ def show_status():
         print()
 
 
+def get_available_ports():
+    """Get list of available ttyACM ports (Star Adventurer GTi mounts)."""
+    ports = []
+    for i in range(10):
+        port = f'/dev/ttyACM{i}'
+        if os.path.exists(port):
+            ports.append(port)
+    return ports
+
+
+def auto_connect():
+    """Automatically assign ports and connect all mounts."""
+    mounts = discover_mounts()
+
+    if not mounts:
+        print('No mounts discovered. Is INDI server running?')
+        return False
+
+    ports = get_available_ports()
+    if not ports:
+        print('No USB devices found at /dev/ttyACM*')
+        return False
+
+    if len(ports) < len(mounts):
+        print(f'Warning: Found {len(ports)} ports but {len(mounts)} mount instances')
+
+    print(f'Auto-connecting {len(mounts)} mount(s) to {len(ports)} port(s)...')
+
+    # Assign each mount to a port and connect
+    for i, mount in enumerate(mounts):
+        if i >= len(ports):
+            print(f'  Mount {mount["id"]}: No available port')
+            continue
+
+        device = mount['device']
+        port = ports[i]
+
+        # Set port
+        indi_set(device, 'DEVICE_PORT.PORT', port)
+        time.sleep(0.3)
+
+        # Connect
+        indi_set(device, 'CONNECTION.CONNECT', 'On')
+        time.sleep(2)
+
+        # Verify connection
+        conn = indi_get(device, 'CONNECTION.CONNECT')
+        if conn == 'On':
+            print(f'  Mount {mount["id"]}: Connected on {port}')
+        else:
+            print(f'  Mount {mount["id"]}: FAILED to connect on {port}')
+
+    # Apply location to all connected mounts
+    setup_location()
+
+    return True
+
+
 def assign_ports():
     """Interactive port assignment for mounts."""
     mounts = discover_mounts()
@@ -405,13 +463,7 @@ def assign_ports():
         print('No mounts discovered. Start INDI server first.')
         return
 
-    # Get available ports
-    ports = []
-    for i in range(10):
-        port = f'/dev/ttyACM{i}'
-        if os.path.exists(port):
-            ports.append(port)
-
+    ports = get_available_ports()
     if not ports:
         print('No USB devices found at /dev/ttyACM*')
         return
@@ -479,6 +531,9 @@ def main():
     elif args[0] == 'stop':
         stop_all_mounts()
         return 0
+
+    elif args[0] == 'connect':
+        return 0 if auto_connect() else 1
 
     elif args[0] == 'assign':
         assign_ports()

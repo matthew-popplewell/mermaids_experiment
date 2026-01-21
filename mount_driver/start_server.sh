@@ -10,6 +10,7 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NUM_MOUNTS=${1:-0}  # 0 = auto-detect
 
 echo 'Cleaning up old processes...'
@@ -36,10 +37,17 @@ if [ "$NUM_MOUNTS" -eq 1 ]; then
     CMD="indiserver -v indi_staradventurergti_telescope"
     DEVICE_NAME="Star Adventurer GTi"
 else
-    # Multi-mount mode - use named instances
+    # Multi-mount mode - create wrapper scripts with INDIDEV set for each mount
     CMD="indiserver -v"
     for i in $(seq 1 $NUM_MOUNTS); do
-        CMD="$CMD indi_staradventurergti_telescope -n \"Mount $i\""
+        WRAPPER="$SCRIPT_DIR/.mount${i}_driver.sh"
+        cat > "$WRAPPER" << WRAPPER_EOF
+#!/bin/bash
+export INDIDEV="Mount $i"
+exec indi_staradventurergti_telescope "\$@"
+WRAPPER_EOF
+        chmod +x "$WRAPPER"
+        CMD="$CMD $WRAPPER"
     done
     DEVICE_NAME="Mount"
 fi
@@ -60,10 +68,8 @@ echo "Connecting mounts..."
 if [ "$NUM_MOUNTS" -eq 1 ]; then
     indi_setprop "Star Adventurer GTi.CONNECTION.CONNECT=On" 2>/dev/null && echo "  Connected: Star Adventurer GTi" || echo "  Warning: Could not connect mount"
 else
-    for i in $(seq 1 $NUM_MOUNTS); do
-        indi_setprop "Mount $i.CONNECTION.CONNECT=On" 2>/dev/null && echo "  Connected: Mount $i" || echo "  Warning: Could not connect Mount $i"
-        sleep 1
-    done
+    # Use multi_mount.py to auto-assign ports and connect
+    "$SCRIPT_DIR/multi_mount.py" connect
 fi
 
 echo ""
