@@ -22,12 +22,21 @@ Workflow:
     5. Mount's GoTo now accurately slews to any Az/El target
 """
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from typing import Optional
 
 # Add parent directory to path for imports
-sys.path.insert(0, '/home/mattpopplewell/mermaids_experiment/asi_driver/src')
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_asi_driver_src = os.path.join(_script_dir, '..', 'asi_driver', 'src')
+sys.path.insert(0, _asi_driver_src)
+
+# SDK path for camera initialization
+_sdk_path = os.path.join(
+    _script_dir, '..', 'asi_driver',
+    'ASI_linux_mac_SDK_V1.41', 'lib', 'x64', 'libASICamera2.so.1.41'
+)
 
 from asi_driver.camera import (
     init_sdk,
@@ -201,7 +210,7 @@ def calibrate_mount(
 
     # Initialize camera SDK
     try:
-        init_sdk()
+        init_sdk(_sdk_path)
     except Exception as e:
         return CalibrationResult(
             success=False,
@@ -545,7 +554,7 @@ Examples:
     # List cameras mode
     if args.list_cameras:
         try:
-            init_sdk()
+            init_sdk(_sdk_path)
             cameras = list_cameras_with_ids()
             if cameras:
                 print('Connected cameras:')
@@ -600,6 +609,8 @@ Examples:
             fov_estimate=args.fov,
             dry_run=args.dry_run,
         )
+        if not result.success:
+            print(f'\nCalibration failed: {result.message}')
         return 0 if result.success else 1
 
 

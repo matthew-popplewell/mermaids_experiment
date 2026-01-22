@@ -96,8 +96,8 @@ Keep this terminal open. Single mount appears as "Star Adventurer GTi"; multiple
 ### Set Location
 
 ```bash
-./point_mount.py set-location 39.917494,-105.0039301,1640   # Manual
-./multi_mount.py set-location 39.917494,-105.0039301,1640
+./point_mount.py set-location 39.917494,-105.0039301   # Manual
+./multi_mount.py set-location 39.917494,-105.0039301
 ./point_mount.py gps-location                # From USB GPS
 ./multi_mount.py gps-location
 ```

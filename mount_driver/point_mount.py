@@ -26,7 +26,7 @@ Calibration Example:
     ./point_mount.py sync 0 0
 
 GoTo Example:
-    ./point_mount.py set-location 36.17 -115.14   # Set to Las Vegas
+    ./point_mount.py set-location 39.917494,-105.0039301   # Set to Advanced Space HQ
     ./point_mount.py goto 90 45                    # Point to Az=90, El=45
 """
 import sys
