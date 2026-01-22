@@ -85,20 +85,19 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 ### Start the Server
 
 ```bash
-./start_server.sh      # Auto-detects mounts and connects them
-./start_server.sh 4    # Force 4 mount instances
+./start_server.sh
 ```
 
 Keep this terminal open. Single mount appears as "Star Adventurer GTi"; multiple mounts as "Mount 1", "Mount 2", etc.
 
-### Double check connection
+### Connect mounts
 ./multi_mount.py connect
 
 ### Set Location
 
 ```bash
-./point_mount.py set-location 36.17 -115.14   # Manual
-./multi_mount.py set-location 36.17 -115.14
+./point_mount.py set-location 39.917494,-105.0039301,1640   # Manual
+./multi_mount.py set-location 39.917494,-105.0039301,1640
 ./point_mount.py gps-location                # From USB GPS
 ./multi_mount.py gps-location
 ```
