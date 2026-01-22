@@ -2,7 +2,7 @@
 name = "mermaids"
 version = "0.1.0"
 description = "Telescope mount control and ZWO ASI camera driver for astronomical imaging"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["astronomy", "telescope", "mount", "zwo", "asi", "camera", "astrophotography", "gps"]
 
@@ -42,6 +42,13 @@ asi-burst = "asi_driver.cli.burst:main"
 asi-gps-test = "asi_driver.cli.gps_test:main"
 asi-cam-setup = "asi_driver.cli.cam_setup:main"
 
+# Mount driver CLI commands
+mount-single = "mount_driver.cli.mount:main"
+mount-multi = "mount_driver.cli.mounts:main"
+mount-calibrate = "mount_driver.cli.calibrate:main"
+mount-diagnose = "mount_driver.cli.diagnose:main"
+mount-observe = "mount_driver.cli.observe:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -50,4 +57,4 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["asi_driver/src/asi_driver", "mount_driver"]
+packages = ["asi_driver/src/asi_driver", "src/mount_driver"]
