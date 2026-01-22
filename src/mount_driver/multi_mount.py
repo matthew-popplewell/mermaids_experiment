@@ -159,7 +159,7 @@ class MultiMountController:
         """Convert Az/Alt to RA/DEC using LST from specified mount.
 
         Args:
-            az: Azimuth in degrees
+            az: Azimuth in degrees (0=North, 90=East, 180=South, 270=West)
             alt: Altitude in degrees
             lat: Observer latitude in degrees
             device: INDI device name for LST
@@ -197,6 +197,56 @@ class MultiMountController:
             ra_hours -= 24
 
         return ra_hours, math.degrees(dec_rad)
+
+    def radec_to_azalt(self, ra_hours: float, dec_deg: float, lat: float, device: str) -> Optional[Tuple[float, float]]:
+        """Convert RA/DEC to Az/Alt using LST from specified mount.
+
+        Args:
+            ra_hours: Right Ascension in hours (0-24)
+            dec_deg: Declination in degrees (-90 to 90)
+            lat: Observer latitude in degrees
+            device: INDI device name for LST
+
+        Returns:
+            (az_degrees, alt_degrees) or None - Az is 0=North, 90=East
+        """
+        lst = self.get_lst(device)
+        if lst is None:
+            return None
+
+        # Hour angle = LST - RA
+        ha_hours = lst - ra_hours
+        while ha_hours < -12:
+            ha_hours += 24
+        while ha_hours > 12:
+            ha_hours -= 24
+
+        ha_rad = math.radians(ha_hours * 15.0)
+        dec_rad = math.radians(dec_deg)
+        lat_rad = math.radians(lat)
+
+        # Calculate altitude
+        sin_alt = math.sin(dec_rad) * math.sin(lat_rad) + \
+                  math.cos(dec_rad) * math.cos(lat_rad) * math.cos(ha_rad)
+        alt_rad = math.asin(max(-1, min(1, sin_alt)))
+
+        # Calculate azimuth
+        cos_alt = math.cos(alt_rad)
+        if abs(cos_alt) < 1e-10:
+            az_rad = 0
+        else:
+            sin_az = -math.sin(ha_rad) * math.cos(dec_rad) / cos_alt
+            cos_az = (math.sin(dec_rad) - math.sin(lat_rad) * math.sin(alt_rad)) / \
+                     (math.cos(lat_rad) * cos_alt)
+            az_rad = math.atan2(sin_az, cos_az)
+
+        az_deg = math.degrees(az_rad)
+        while az_deg < 0:
+            az_deg += 360
+        while az_deg >= 360:
+            az_deg -= 360
+
+        return az_deg, math.degrees(alt_rad)
 
     def _wait_for_mount_goto(self, device: str, timeout: float = GOTO_TIMEOUT) -> bool:
         """Wait for a single mount's GoTo to complete."""
@@ -244,6 +294,10 @@ class MultiMountController:
 
     def _sync_mount(self, device: str, sync_ra: float, sync_dec: float) -> bool:
         """Sync a single mount to coordinates."""
+        # Read position before sync
+        before_ra = indi_get(f'{device}.EQUATORIAL_EOD_COORD.RA')
+        before_dec = indi_get(f'{device}.EQUATORIAL_EOD_COORD.DEC')
+
         # Enable tracking and standard sync mode - required for sync on Star Adventurer GTi
         indi_set(f'{device}.TELESCOPE_TRACK_STATE.TRACK_ON', 'On')
         indi_set(f'{device}.ALIGNSYNCMODE.ALIGNSTANDARDSYNC', 'On')
@@ -253,6 +307,20 @@ class MultiMountController:
         time.sleep(0.1)
         indi_set(f'{device}.EQUATORIAL_EOD_COORD.RA={sync_ra};DEC={sync_dec}')
         time.sleep(0.5)
+
+        # Read position after sync to verify
+        after_ra = indi_get(f'{device}.EQUATORIAL_EOD_COORD.RA')
+        after_dec = indi_get(f'{device}.EQUATORIAL_EOD_COORD.DEC')
+
+        # Calculate how much offset was actually applied
+        if before_ra and after_ra:
+            ra_change = float(after_ra) - float(before_ra)
+            dec_change = float(after_dec) - float(before_dec)
+            expected_ra_change = sync_ra - float(before_ra)
+            expected_dec_change = sync_dec - float(before_dec)
+            print(f'      [Sync debug] RA change: expected {expected_ra_change:+.4f}h, actual {ra_change:+.4f}h')
+            print(f'      [Sync debug] Dec change: expected {expected_dec_change:+.2f}°, actual {dec_change:+.2f}°')
+
         indi_set(f'{device}.ON_COORD_SET.SLEW', 'On')
         return True
 
@@ -298,7 +366,7 @@ class MultiMountController:
         target_ra, target_dec = result
 
         print(f'Target: Az={target_az:.1f}  Alt={target_alt:+.1f}')
-        print(f'        RA={target_ra:.2f}h  DEC={target_dec:+.1f}')
+        print(f'        RA={target_ra:.4f}h  DEC={target_dec:+.2f}')
         print()
 
         print(f'Slewing {len(mounts)} mount(s)...')
@@ -317,10 +385,28 @@ class MultiMountController:
                     results[mount.id] = success
                     status = 'Done' if success else 'FAILED'
 
+                    # Get actual position
                     az = indi_get(f'{mount.device}.HORIZONTAL_COORD.AZ')
                     alt = indi_get(f'{mount.device}.HORIZONTAL_COORD.ALT')
+                    ra = indi_get(f'{mount.device}.EQUATORIAL_EOD_COORD.RA')
+                    dec = indi_get(f'{mount.device}.EQUATORIAL_EOD_COORD.DEC')
+
                     if az and alt:
-                        print(f'  Mount {mount.id}: {status} - Az={float(az):.1f}  Alt={float(alt):+.1f}')
+                        actual_az = float(az)
+                        actual_alt = float(alt)
+                        # Calculate error
+                        az_err = actual_az - target_az
+                        if az_err > 180:
+                            az_err -= 360
+                        elif az_err < -180:
+                            az_err += 360
+                        alt_err = actual_alt - target_alt
+
+                        print(f'  Mount {mount.id}: {status}')
+                        print(f'    Actual:  Az={actual_az:.1f}  Alt={actual_alt:+.1f}')
+                        print(f'    Error:   Az={az_err:+.2f}  Alt={alt_err:+.2f}')
+                        if ra and dec:
+                            print(f'    RA/Dec:  RA={float(ra):.4f}h  Dec={float(dec):+.2f}')
                     else:
                         print(f'  Mount {mount.id}: {status}')
                 except Exception as e:
@@ -359,26 +445,63 @@ class MultiMountController:
                 return False
 
         print(f'Syncing {len(mounts)} mount(s) to Az={sync_az:.1f}  Alt={sync_alt:+.1f}')
+        print()
+        print('NOTE: If using phone compass, values are MAGNETIC. For true north,')
+        print('      subtract local magnetic declination (~7° in Colorado).')
+        print()
 
         for mount in mounts:
             device = mount.device
+
+            # Read position before sync
+            before_az = indi_get(f'{device}.HORIZONTAL_COORD.AZ')
+            before_alt = indi_get(f'{device}.HORIZONTAL_COORD.ALT')
+            before_ra = indi_get(f'{device}.EQUATORIAL_EOD_COORD.RA')
+            before_dec = indi_get(f'{device}.EQUATORIAL_EOD_COORD.DEC')
+
             result = self.azalt_to_radec(sync_az, sync_alt, lat, device)
             if result is None:
                 print(f'  Mount {mount.id}: ERROR - Cannot convert coordinates')
                 continue
 
             sync_ra, sync_dec = result
+            print(f'  Mount {mount.id}:')
+            if before_az and before_alt:
+                print(f'    Before: Az={float(before_az):.1f}  Alt={float(before_alt):+.1f}')
+                print(f'            RA={float(before_ra):.4f}h  Dec={float(before_dec):+.2f}')
+            print(f'    Sync to: Az={sync_az:.1f}  Alt={sync_alt:+.1f}')
+            print(f'             RA={sync_ra:.4f}h  Dec={sync_dec:+.2f}')
+
             self._sync_mount(device, sync_ra, sync_dec)
 
             # Wait for HORIZONTAL_COORD to update after sync
             time.sleep(0.5)
 
+            # Read position after sync
             az = indi_get(f'{device}.HORIZONTAL_COORD.AZ')
             alt = indi_get(f'{device}.HORIZONTAL_COORD.ALT')
+            ra = indi_get(f'{device}.EQUATORIAL_EOD_COORD.RA')
+            dec = indi_get(f'{device}.EQUATORIAL_EOD_COORD.DEC')
+
             if az and alt:
-                print(f'  Mount {mount.id}: Synced - Now reads Az={float(az):.1f}  Alt={float(alt):+.1f}')
+                actual_az = float(az)
+                actual_alt = float(alt)
+                az_err = actual_az - sync_az
+                if az_err > 180:
+                    az_err -= 360
+                elif az_err < -180:
+                    az_err += 360
+                alt_err = actual_alt - sync_alt
+
+                print(f'    After:  Az={actual_az:.1f}  Alt={actual_alt:+.1f}')
+                print(f'            RA={float(ra):.4f}h  Dec={float(dec):+.2f}')
+                print(f'    Error:  Az={az_err:+.2f}  Alt={alt_err:+.2f}')
+
+                if abs(az_err) > 1 or abs(alt_err) > 1:
+                    print(f'    *** WARNING: Sync may not have taken effect! ***')
             else:
-                print(f'  Mount {mount.id}: Synced')
+                print(f'    After: (unable to read position)')
+            print()
 
         return True
 

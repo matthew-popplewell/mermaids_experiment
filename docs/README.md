@@ -177,6 +177,11 @@ This will:
 - Plate solve to determine actual sky position
 - Sync each mount to match the solution
 
+### 5b. Calibrate manually (if plate solving fails)
+```bash
+mount-multi sync AZ EL
+```
+
 ### 6. Point All Mounts
 
 ```bash
