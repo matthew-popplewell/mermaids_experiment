@@ -11,6 +11,10 @@ Usage:
     mount-multi gps-location           # Get location from GPS receiver
     mount-multi stop                   # Emergency stop ALL mounts
     mount-multi debug                  # Debug coordinate conversions
+    mount-multi calibrate-pointing --mount 1         # Calibrate (phone measurements)
+    mount-multi calibrate-pointing --auto --mount 1  # Calibrate (plate solving)
+    mount-multi calibrate-pointing --show            # Show model params
+    mount-multi goto-solve AZ EL --mount 1           # Closed-loop goto with plate solving
 """
 
 import argparse
@@ -36,6 +40,8 @@ Commands:
   stop                      Emergency stop all mounts
   debug                     Debug coordinate conversions (round-trip test)
   debug AZ EL               Test conversion for specific Az/El
+  calibrate-pointing        Calibrate pointing model for polar misalignment
+  goto-solve AZ EL          Closed-loop GoTo with plate solving verification
 
 Examples:
   mount-multi connect
@@ -45,6 +51,11 @@ Examples:
   mount-multi goto 90 45 --mount 1  # Only mount 1
   mount-multi debug                  # Test current position
   mount-multi debug 90 45            # Test specific Az/El
+  mount-multi calibrate-pointing --auto --mount 1   # Auto-calibrate (plate solving)
+  mount-multi calibrate-pointing --mount 1          # Calibrate (phone measurements)
+  mount-multi calibrate-pointing --show             # Show all models
+  mount-multi goto-solve 90 45 --mount 1            # Closed-loop goto
+  mount-multi goto-solve 180 50 --mount 1 --tolerance 0.5  # Tighter tolerance
 """,
     )
 
@@ -56,6 +67,24 @@ Examples:
     parser.add_argument('--port', help='GPS serial port')
     parser.add_argument('--wait', type=int, default=30,
                        help='GPS fix timeout in seconds')
+    parser.add_argument('--show', action='store_true',
+                       help='Show pointing model parameters')
+    parser.add_argument('--clear', action='store_true',
+                       help='Clear pointing model calibration')
+    parser.add_argument('--auto', action='store_true',
+                       help='Auto-calibrate using plate solving (no phone needed)')
+    parser.add_argument('--camera', type=str, default=None,
+                       help='Camera ID for plate solving')
+    parser.add_argument('--camera-index', type=int, default=None,
+                       help='Camera index for plate solving')
+    parser.add_argument('--exposure', type=float, default=0.5,
+                       help='Exposure time for plate solving (seconds)')
+    parser.add_argument('--gain', type=int, default=50,
+                       help='Camera gain for plate solving')
+    parser.add_argument('--fov', type=float, default=10.0,
+                       help='FOV estimate for plate solving (degrees)')
+    parser.add_argument('--tolerance', type=float, default=1.0,
+                       help='Pointing tolerance for goto-solve (degrees)')
 
     args = parser.parse_args()
 
@@ -155,6 +184,12 @@ Examples:
 
     elif args.command == 'debug':
         return cmd_debug(controller, args)
+
+    elif args.command == 'calibrate-pointing':
+        return cmd_calibrate_pointing(controller, args)
+
+    elif args.command == 'goto-solve' and len(args.args) >= 2:
+        return cmd_goto_solve(controller, args)
 
     else:
         parser.print_help()
@@ -285,6 +320,90 @@ def cmd_debug(controller, args):
 
     print()
     return 0
+
+
+def cmd_calibrate_pointing(controller, args):
+    """Calibrate pointing model for polar misalignment correction."""
+    import math
+    from mount_driver.pointing_model import PointingModel
+
+    if args.show:
+        # Show all pointing models
+        config = controller.load_config()
+        models = config.get('pointing_models', {})
+        if not models:
+            print('No pointing models calibrated.')
+            print('Run: mount-multi calibrate-pointing --mount N')
+            print('  or: mount-multi calibrate-pointing --auto --mount N  (uses plate solving)')
+            return 0
+        print('=== Pointing Models ===\n')
+        for mount_id, data in sorted(models.items()):
+            model = PointingModel.from_dict(data)
+            print(f'Mount {mount_id}:')
+            print(f'  ME (azimuth error):  {math.degrees(model.me):+.3f} deg ({model.me:+.4f} rad)')
+            print(f'  MA (altitude error): {math.degrees(model.ma):+.3f} deg ({model.ma:+.4f} rad)')
+            print()
+        return 0
+
+    if args.clear:
+        if args.mount is None:
+            print('ERROR: Specify which mount to clear: --mount N')
+            return 1
+        controller.clear_pointing_model(args.mount)
+        print(f'Pointing model cleared for Mount {args.mount}.')
+        return 0
+
+    if args.mount is None:
+        print('ERROR: Specify which mount to calibrate: --mount N')
+        print('  mount-multi calibrate-pointing --mount 1           # Interactive (phone)')
+        print('  mount-multi calibrate-pointing --auto --mount 1    # Auto (plate solving)')
+        print('  mount-multi calibrate-pointing --show')
+        return 1
+
+    if args.auto:
+        from mount_driver.calibration import auto_calibrate_pointing
+        camera_index = args.camera_index if args.camera_index is not None else args.mount - 1
+        return 0 if auto_calibrate_pointing(
+            mount_id=args.mount,
+            camera_id=args.camera,
+            camera_index=camera_index,
+            exposure_s=args.exposure,
+            gain=args.gain,
+            fov_estimate=args.fov,
+        ) else 1
+
+    return 0 if controller.calibrate_pointing(args.mount) else 1
+
+
+def cmd_goto_solve(controller, args):
+    """Closed-loop GoTo with plate solving verification."""
+    from mount_driver.calibration import goto_with_solve
+
+    try:
+        target_az = float(args.args[0])
+        target_alt = float(args.args[1])
+    except ValueError:
+        print('ERROR: AZ and EL must be numbers')
+        return 1
+
+    if args.mount is None:
+        print('ERROR: Specify which mount: --mount N')
+        return 1
+
+    camera_index = args.camera_index if args.camera_index is not None else args.mount - 1
+
+    success = goto_with_solve(
+        target_az=target_az,
+        target_alt=target_alt,
+        mount_id=args.mount,
+        camera_id=args.camera,
+        camera_index=camera_index,
+        exposure_s=args.exposure,
+        gain=args.gain,
+        fov_estimate=args.fov,
+        tolerance_deg=args.tolerance,
+    )
+    return 0 if success else 1
 
 
 if __name__ == '__main__':

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from mount_driver.indi import indi_get, indi_set
+from mount_driver.pointing_model import PointingModel, compute_correction
 
 
 # Default device name for single mount mode
@@ -284,6 +285,15 @@ class MountController:
         target_ra, target_dec = result
         print(f'(Converted to RA={target_ra:.2f}h  DEC={target_dec:+.1f})')
 
+        # Apply pointing model correction if calibrated
+        model_data = config.get('pointing_model')
+        if model_data:
+            model = PointingModel.from_dict(model_data)
+            lst = self.get_lst()
+            if lst is not None and not model.is_zero():
+                target_ra, target_dec = compute_correction(target_ra, target_dec, lst, model)
+                print(f'(Corrected to RA={target_ra:.2f}h  DEC={target_dec:+.1f})')
+
         self._indi_set('ON_COORD_SET.SLEW', 'On')
         time.sleep(0.1)
 
@@ -401,6 +411,11 @@ class MountController:
 
         sync_ra, sync_dec = result
         print(f'(Equivalent: RA={sync_ra:.2f}h  DEC={sync_dec:+.1f})')
+
+        # Enable tracking and standard sync mode - required for sync on Star Adventurer GTi
+        self._indi_set('TELESCOPE_TRACK_STATE.TRACK_ON', 'On')
+        self._indi_set('ALIGNSYNCMODE.ALIGNSTANDARDSYNC', 'On')
+        time.sleep(0.3)
 
         self._indi_set('ON_COORD_SET.SYNC', 'On')
         time.sleep(0.1)

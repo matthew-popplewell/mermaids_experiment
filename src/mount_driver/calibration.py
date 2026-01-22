@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from mount_driver.mount import MountController, sync_equatorial, get_equatorial, load_config
-from mount_driver.multi_mount import discover_mounts
+from mount_driver.multi_mount import MultiMountController, discover_mounts
+from mount_driver.pointing_model import (
+    PointingModel, compute_correction, CalibrationPoint, solve_pointing_model
+)
 from mount_driver.indi import indi_get
 
 
@@ -452,3 +455,353 @@ def calibrate_all_mounts(
         print(f'  Mount {mount_id}: {status} - {result.message}')
 
     return results
+
+
+def goto_with_solve(
+    target_az: float,
+    target_alt: float,
+    mount_id: int = 1,
+    camera_id: Optional[str] = None,
+    camera_index: int = 0,
+    exposure_s: float = 0.5,
+    gain: int = 50,
+    fov_estimate: float = 10.0,
+    tolerance_deg: float = 1.0,
+    max_iterations: int = 5,
+    sdk_path: Optional[str] = None,
+) -> bool:
+    """Closed-loop GoTo: slew to target, plate solve, correct, repeat.
+
+    Commands the mount to a target Az/El, then uses plate solving to
+    verify the actual position and iteratively correct until on-target.
+
+    Args:
+        target_az: Target azimuth in degrees
+        target_alt: Target altitude in degrees
+        mount_id: Mount number
+        camera_id: Camera custom ID (overrides camera_index)
+        camera_index: Camera index to use
+        exposure_s: Exposure time for plate solving
+        gain: Camera gain
+        fov_estimate: FOV estimate in degrees
+        tolerance_deg: Acceptable pointing error in degrees
+        max_iterations: Maximum correction iterations
+        sdk_path: Path to ASI SDK
+
+    Returns:
+        True if target reached within tolerance
+    """
+    import math
+    import time
+    from asi_driver.camera import init_sdk, get_camera, get_camera_by_id
+
+    controller = MultiMountController()
+    config = controller.load_config()
+    lat = config.get('lat')
+    if lat is None:
+        print('ERROR: Location not set. Run: mount-multi set-location LAT LON')
+        return False
+
+    # Initialize camera
+    actual_sdk_path = sdk_path or str(_SDK_PATH)
+    try:
+        init_sdk(actual_sdk_path)
+    except Exception as e:
+        print(f'ERROR: Failed to initialize camera SDK: {e}')
+        return False
+
+    try:
+        if camera_id:
+            camera = get_camera_by_id(camera_id)
+        else:
+            camera = get_camera(camera_index)
+    except RuntimeError as e:
+        print(f'ERROR: No camera found: {e}')
+        return False
+
+    mounts = controller.discover_mounts()
+    mount = None
+    for m in mounts:
+        if m.id == mount_id:
+            mount = m
+            break
+    if mount is None:
+        camera.close()
+        print(f'ERROR: Mount {mount_id} not found')
+        return False
+
+    device = mount.device
+
+    print(f'=== Closed-Loop GoTo (Mount {mount_id}) ===')
+    print(f'Target: Az={target_az:.1f}  El={target_alt:.1f}')
+    print(f'Tolerance: {tolerance_deg:.1f} deg, max {max_iterations} iterations')
+    print()
+
+    # Current target for the mount (will be adjusted each iteration)
+    cmd_az = target_az
+    cmd_alt = target_alt
+    total_err = None
+
+    for iteration in range(1, max_iterations + 1):
+        print(f'--- Iteration {iteration}/{max_iterations} ---')
+
+        # Convert target Az/El to RA/DEC and slew
+        result = controller.azalt_to_radec(cmd_az, cmd_alt, lat, device)
+        if result is None:
+            print('  ERROR: Cannot convert coordinates')
+            camera.close()
+            return False
+
+        cmd_ra, cmd_dec = result
+
+        # Apply pointing model if available
+        pointing_models = config.get('pointing_models', {})
+        model_data = pointing_models.get(str(mount_id))
+        if model_data:
+            model = PointingModel.from_dict(model_data)
+            lst = controller.get_lst(device)
+            if lst is not None and not model.is_zero():
+                cmd_ra, cmd_dec = compute_correction(cmd_ra, cmd_dec, lst, model)
+
+        print(f'  Slewing to Az={cmd_az:.1f} El={cmd_alt:.1f} (RA={cmd_ra:.4f}h DEC={cmd_dec:+.2f})...')
+        controller._goto_mount(device, cmd_ra, cmd_dec)
+
+        time.sleep(1.0)  # Let mount settle
+
+        # Plate solve to find actual position
+        print(f'  Plate solving...')
+        try:
+            solution = _capture_and_solve(camera, exposure_s, gain, fov_estimate)
+        except Exception as e:
+            print(f'  ERROR: Capture/solve failed: {e}')
+            camera.close()
+            return False
+
+        if solution is None:
+            print('  ERROR: Plate solve failed. Check sky conditions.')
+            camera.close()
+            return False
+
+        # Convert solved RA/DEC to Az/El for comparison
+        solved_ra_hours = solution.ra / 15.0
+        solved_dec = solution.dec
+        solved_azalt = controller.radec_to_azalt(solved_ra_hours, solved_dec, lat, device)
+        if solved_azalt is None:
+            print('  ERROR: Cannot convert solved position')
+            camera.close()
+            return False
+
+        actual_az, actual_alt = solved_azalt
+
+        # Calculate error
+        az_err = actual_az - target_az
+        if az_err > 180:
+            az_err -= 360
+        elif az_err < -180:
+            az_err += 360
+        alt_err = actual_alt - target_alt
+        total_err = math.sqrt(az_err**2 + alt_err**2)
+
+        print(f'  Solved:  Az={actual_az:.2f}  El={actual_alt:.2f}')
+        print(f'  Error:   Az={az_err:+.2f}  El={alt_err:+.2f}  Total={total_err:.2f} deg')
+
+        if total_err <= tolerance_deg:
+            print(f'\n  On target! (error {total_err:.2f} <= {tolerance_deg:.1f} deg)')
+            camera.close()
+            return True
+
+        # Adjust: move the command point by the negative of the error
+        cmd_az = cmd_az - az_err
+        cmd_alt = cmd_alt - alt_err
+
+        # Normalize azimuth
+        while cmd_az < 0:
+            cmd_az += 360
+        while cmd_az >= 360:
+            cmd_az -= 360
+
+        print(f'  Adjusting next command to Az={cmd_az:.1f} El={cmd_alt:.1f}')
+        print()
+
+    err_str = f'{total_err:.2f}' if total_err is not None else '?'
+    print(f'\nWARNING: Did not converge after {max_iterations} iterations (error={err_str} deg)')
+    camera.close()
+    return False
+
+
+def auto_calibrate_pointing(
+    mount_id: int = 1,
+    camera_id: Optional[str] = None,
+    camera_index: int = 0,
+    exposure_s: float = 0.5,
+    gain: int = 50,
+    fov_estimate: float = 10.0,
+    sdk_path: Optional[str] = None,
+) -> bool:
+    """Auto-calibrate pointing model using plate solving.
+
+    Slews to several spread-out targets, plate solves each to determine
+    actual position, then solves for the ME/MA polar misalignment model.
+    No phone measurements needed.
+
+    Args:
+        mount_id: Mount number to calibrate
+        camera_id: Camera custom ID (overrides camera_index)
+        camera_index: Camera index to use
+        exposure_s: Exposure time for plate solving
+        gain: Camera gain
+        fov_estimate: FOV estimate in degrees
+        sdk_path: Path to ASI SDK
+
+    Returns:
+        True if calibration succeeded
+    """
+    import math
+    import time
+    from asi_driver.camera import init_sdk, get_camera, get_camera_by_id
+
+    controller = MultiMountController()
+    config = controller.load_config()
+    lat = config.get('lat')
+    if lat is None:
+        print('ERROR: Location not set. Run: mount-multi set-location LAT LON')
+        return False
+
+    # Initialize camera
+    actual_sdk_path = sdk_path or str(_SDK_PATH)
+    try:
+        init_sdk(actual_sdk_path)
+    except Exception as e:
+        print(f'ERROR: Failed to initialize camera SDK: {e}')
+        return False
+
+    try:
+        if camera_id:
+            camera = get_camera_by_id(camera_id)
+        else:
+            camera = get_camera(camera_index)
+    except RuntimeError as e:
+        print(f'ERROR: No camera found: {e}')
+        return False
+
+    mounts = controller.discover_mounts()
+    mount = None
+    for m in mounts:
+        if m.id == mount_id:
+            mount = m
+            break
+    if mount is None:
+        camera.close()
+        print(f'ERROR: Mount {mount_id} not found')
+        return False
+
+    device = mount.device
+
+    # Calibration targets spread across the sky
+    targets = [
+        (90.0, 45.0),    # East, mid-altitude
+        (180.0, 50.0),   # South, mid-altitude
+        (270.0, 45.0),   # West, mid-altitude
+    ]
+
+    print(f'=== Auto Pointing Calibration (Mount {mount_id}) ===')
+    print()
+    print('Slewing to 3 targets and plate solving each.')
+    print('Make sure mount is synced and stars are visible.')
+    print()
+
+    cal_points = []
+
+    for i, (target_az, target_alt) in enumerate(targets):
+        print(f'--- Target {i+1}/3: Az={target_az:.0f}  El={target_alt:.0f} ---')
+
+        # Convert to RA/DEC
+        result = controller.azalt_to_radec(target_az, target_alt, lat, device)
+        if result is None:
+            print('  ERROR: Cannot convert coordinates')
+            continue
+
+        cmd_ra, cmd_dec = result
+        lst = controller.get_lst(device)
+        if lst is None:
+            print('  ERROR: Cannot read LST')
+            continue
+
+        print(f'  Commanding: RA={cmd_ra:.4f}h  DEC={cmd_dec:+.2f}')
+        print(f'  Slewing...')
+
+        controller._goto_mount(device, cmd_ra, cmd_dec)
+        time.sleep(2.0)  # Let mount settle
+
+        # Plate solve to find actual position
+        print(f'  Plate solving...')
+        try:
+            solution = _capture_and_solve(camera, exposure_s, gain, fov_estimate)
+        except Exception as e:
+            print(f'  ERROR: Capture/solve failed: {e}')
+            continue
+
+        if solution is None:
+            print('  ERROR: Plate solve failed, skipping point')
+            continue
+
+        # Get LST at time of solve (re-read since time has passed)
+        lst = controller.get_lst(device)
+        if lst is None:
+            print('  ERROR: Cannot read LST')
+            continue
+
+        actual_ra_hours = solution.ra / 15.0
+        actual_dec = solution.dec
+
+        # Convert both to Az/El for error display
+        actual_azalt = controller.radec_to_azalt(actual_ra_hours, actual_dec, lat, device)
+        if actual_azalt:
+            actual_az, actual_alt = actual_azalt
+            az_err = actual_az - target_az
+            if az_err > 180:
+                az_err -= 360
+            elif az_err < -180:
+                az_err += 360
+            alt_err = actual_alt - target_alt
+            print(f'  Solved:  Az={actual_az:.1f}  El={actual_alt:.1f}  '
+                  f'(error Az={az_err:+.1f} El={alt_err:+.1f})')
+
+        cal_points.append(CalibrationPoint(
+            commanded_ra=cmd_ra,
+            commanded_dec=cmd_dec,
+            actual_ra=actual_ra_hours,
+            actual_dec=actual_dec,
+            lst=lst
+        ))
+        print(f'  Point recorded.')
+        print()
+
+    camera.close()
+
+    if len(cal_points) < 2:
+        print('ERROR: Need at least 2 successful plate solves')
+        return False
+
+    # Solve the pointing model
+    try:
+        model, rms = solve_pointing_model(cal_points)
+    except ValueError as e:
+        print(f'ERROR: Cannot solve model: {e}')
+        return False
+
+    print(f'=== Calibration Result ===')
+    print(f'  Points used: {len(cal_points)}')
+    print(f'  ME (azimuth error):  {math.degrees(model.me):+.3f} deg ({model.me:+.4f} rad)')
+    print(f'  MA (altitude error): {math.degrees(model.ma):+.3f} deg ({model.ma:+.4f} rad)')
+    print(f'  RMS residual: {rms:.3f} deg')
+
+    if rms > 2.0:
+        print(f'  *** WARNING: RMS > 2 deg - plate solve results may be inconsistent ***')
+
+    # Save model
+    controller.save_pointing_model(mount_id, model)
+    print()
+    print(f'  Model saved. All future gotos for Mount {mount_id} will apply correction.')
+
+    return True

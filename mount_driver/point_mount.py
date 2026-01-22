@@ -17,6 +17,9 @@ Usage:
     ./point_mount.py stop                 # Emergency stop all motion
     ./point_mount.py track                # Live position tracking display
     ./point_mount.py status               # Show detailed mount status
+    ./point_mount.py calibrate-pointing   # Calibrate pointing model (interactive)
+    ./point_mount.py calibrate-pointing --show   # Show current model
+    ./point_mount.py calibrate-pointing --clear  # Clear calibration
 
 Calibration Example:
     # Point mount at Polaris, then sync to its coordinates
@@ -35,6 +38,12 @@ import json
 import os
 import subprocess
 import math
+
+# Add src/ to path for pointing_model import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from mount_driver.pointing_model import (
+    PointingModel, compute_correction, CalibrationPoint, solve_pointing_model
+)
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), '.mount_config.json')
 
@@ -283,6 +292,15 @@ def goto_horizontal(target_az, target_alt):
     target_ra, target_dec = result
     print(f'(Converted to RA={target_ra:.2f}h  DEC={target_dec:+.1f}°)')
 
+    # Apply pointing model correction if calibrated
+    model_data = config.get('pointing_model')
+    if model_data:
+        model = PointingModel.from_dict(model_data)
+        lst = get_lst()
+        if lst is not None and not model.is_zero():
+            target_ra, target_dec = compute_correction(target_ra, target_dec, lst, model)
+            print(f'(Corrected to RA={target_ra:.2f}h  DEC={target_dec:+.1f}°)')
+
     # Set to SLEW mode and send coordinates
     indi_set('ON_COORD_SET.SLEW', 'On')
     time.sleep(0.1)
@@ -339,6 +357,11 @@ def sync_equatorial(sync_ra, sync_dec):
     print(f'Before sync: RA={current_ra:.3f}h  DEC={current_dec:+.2f}°')
     print(f'Syncing to:  RA={sync_ra:.3f}h  DEC={sync_dec:+.2f}°')
 
+    # Enable tracking and standard sync mode - required for sync on Star Adventurer GTi
+    indi_set('TELESCOPE_TRACK_STATE.TRACK_ON', 'On')
+    indi_set('ALIGNSYNCMODE.ALIGNSTANDARDSYNC', 'On')
+    time.sleep(0.3)
+
     # Set to SYNC mode and send coordinates
     indi_set('ON_COORD_SET.SYNC', 'On')
     time.sleep(0.1)
@@ -381,6 +404,11 @@ def sync_horizontal(sync_az, sync_alt):
 
     sync_ra, sync_dec = result
     print(f'(Equivalent: RA={sync_ra:.2f}h  DEC={sync_dec:+.1f}°)')
+
+    # Enable tracking and standard sync mode - required for sync on Star Adventurer GTi
+    indi_set('TELESCOPE_TRACK_STATE.TRACK_ON', 'On')
+    indi_set('ALIGNSYNCMODE.ALIGNSTANDARDSYNC', 'On')
+    time.sleep(0.3)
 
     # Set to SYNC mode and send coordinates
     indi_set('ON_COORD_SET.SYNC', 'On')
@@ -436,6 +464,113 @@ def show_status():
     coord_mode = 'SLEW' if indi_get('ON_COORD_SET.SLEW') == 'On' else \
                  'TRACK' if indi_get('ON_COORD_SET.TRACK') == 'On' else 'SYNC'
     print(f'Coord mode: {coord_mode}')
+
+
+def calibrate_pointing():
+    """Interactive calibration workflow for the pointing model."""
+    config = load_config()
+    lat = config.get('lat')
+    if lat is None:
+        print('ERROR: Location not set.')
+        print('  Run: ./point_mount.py set-location LAT LON')
+        return 1
+
+    targets = [
+        (90.0, 45.0),    # East, mid-altitude
+        (180.0, 50.0),   # South, mid-altitude
+        (270.0, 45.0),   # West, mid-altitude
+    ]
+
+    print('=== Pointing Calibration ===')
+    print()
+    print('This will slew to 3 targets. At each, measure the actual')
+    print('Az/El with your phone compass/inclinometer and enter them.')
+    print()
+    print('Make sure mount is synced to current position first!')
+    print()
+
+    cal_points = []
+
+    for i, (target_az, target_alt) in enumerate(targets):
+        print(f'--- Target {i+1}/3: Az={target_az:.0f}  El={target_alt:.0f} ---')
+
+        result = azalt_to_radec(target_az, target_alt, lat)
+        if result is None:
+            print('ERROR: Cannot convert coordinates (LST unavailable)')
+            return 1
+
+        target_ra, target_dec = result
+        lst = get_lst()
+        if lst is None:
+            print('ERROR: Cannot read LST')
+            return 1
+
+        print(f'  Commanding: RA={target_ra:.4f}h  DEC={target_dec:+.2f}')
+        print(f'  Slewing...')
+
+        indi_set('ON_COORD_SET.SLEW', 'On')
+        time.sleep(0.1)
+        indi_set(f'EQUATORIAL_EOD_COORD.RA={target_ra};DEC={target_dec}')
+        wait_for_goto()
+
+        time.sleep(1.0)
+
+        print()
+        try:
+            actual_az_str = input(f'  Measured Az (degrees): ')
+            actual_alt_str = input(f'  Measured El (degrees): ')
+            actual_az = float(actual_az_str)
+            actual_alt = float(actual_alt_str)
+        except (ValueError, EOFError):
+            print('  ERROR: Invalid input, skipping point')
+            continue
+
+        lst = get_lst()
+        if lst is None:
+            print('  ERROR: Cannot read LST')
+            continue
+
+        actual_result = azalt_to_radec(actual_az, actual_alt, lat)
+        if actual_result is None:
+            print('  ERROR: Cannot convert actual coordinates')
+            continue
+
+        actual_ra, actual_dec = actual_result
+
+        cal_points.append(CalibrationPoint(
+            commanded_ra=target_ra,
+            commanded_dec=target_dec,
+            actual_ra=actual_ra,
+            actual_dec=actual_dec,
+            lst=lst
+        ))
+
+        print(f'  Point recorded. Error: Az={actual_az - target_az:+.1f}  El={actual_alt - target_alt:+.1f}')
+        print()
+
+    if len(cal_points) < 2:
+        print('ERROR: Need at least 2 valid calibration points')
+        return 1
+
+    try:
+        model, rms = solve_pointing_model(cal_points)
+    except ValueError as e:
+        print(f'ERROR: Cannot solve model: {e}')
+        return 1
+
+    print(f'=== Calibration Result ===')
+    print(f'  ME (azimuth error):  {math.degrees(model.me):+.3f} deg ({model.me:+.4f} rad)')
+    print(f'  MA (altitude error): {math.degrees(model.ma):+.3f} deg ({model.ma:+.4f} rad)')
+    print(f'  RMS residual: {rms:.3f} deg')
+
+    if rms > 2.0:
+        print(f'  *** WARNING: RMS > 2 deg - measurements may be inaccurate ***')
+
+    config['pointing_model'] = model.to_dict()
+    save_config(config)
+    print()
+    print('  Model saved. All future gotos will apply correction.')
+    return 0
 
 
 def main():
@@ -588,6 +723,32 @@ def main():
             print('ERROR: RA and DEC must be numbers')
             return 1
         return 0 if sync_equatorial(sync_ra, sync_dec) else 1
+
+    elif args[0] == 'calibrate-pointing':
+        # Sub-options: --show, --clear, or run calibration
+        if '--show' in args:
+            config = load_config()
+            model_data = config.get('pointing_model')
+            if not model_data:
+                print('No pointing model calibrated.')
+                print('Run: ./point_mount.py calibrate-pointing')
+            else:
+                model = PointingModel.from_dict(model_data)
+                print('=== Pointing Model ===')
+                print(f'  ME (azimuth error):  {math.degrees(model.me):+.3f} deg ({model.me:+.4f} rad)')
+                print(f'  MA (altitude error): {math.degrees(model.ma):+.3f} deg ({model.ma:+.4f} rad)')
+            return 0
+
+        if '--clear' in args:
+            config = load_config()
+            if 'pointing_model' in config:
+                del config['pointing_model']
+                save_config(config)
+            print('Pointing model cleared.')
+            return 0
+
+        # Run calibration
+        return calibrate_pointing()
 
     elif args[0] == 'track':
         print('Live position tracking. Press Ctrl+C to stop.\n')

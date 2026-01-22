@@ -32,6 +32,7 @@ mermaids/
 ├── mount_driver/          # Mount control package
 │   ├── mount.py          # Single mount control
 │   ├── multi_mount.py    # Multi-mount coordination
+│   ├── pointing_model.py # Polar misalignment correction
 │   ├── calibration.py    # Plate solving calibration
 │   ├── gps.py            # GPS location services
 │   └── cli/              # Command-line interfaces
@@ -150,7 +151,7 @@ In new terminal:
 mount-multi gps-location
 
 # Or set manually
-mount-multi set-location 39.917 -105.004
+mount-multi set-location 39.917506 -105.002898
 ```
 
 ### 4. Polar Alignment (Physical)
@@ -181,6 +182,76 @@ This will:
 ```bash
 mount-multi sync AZ EL
 ```
+
+### 5c. Pointing Model Calibration
+
+Even with a sync, mounts that are only roughly polar aligned (5-15° off) will have growing GoTo errors as they slew away from the sync point. The pointing model corrects for this by measuring the polar misalignment and applying a per-mount correction to all future GoTo commands.
+
+**Option A: Auto-calibrate with plate solving (preferred)**
+
+Fully automated — slews to 3 targets and plate solves each to measure actual position:
+
+```bash
+# Auto-calibrate using camera (mount 1 paired with camera index 0)
+mount-multi calibrate-pointing --auto --mount 1
+
+# Specify camera explicitly
+mount-multi calibrate-pointing --auto --mount 2 --camera-index 1
+
+# Adjust exposure/gain for conditions
+mount-multi calibrate-pointing --auto --mount 1 --exposure 1.0 --gain 100
+```
+
+**Option B: Manual calibration with phone**
+
+If plate solving is unavailable (no camera, daytime, etc.):
+
+```bash
+mount-multi calibrate-pointing --mount 1
+```
+
+**Manage models:**
+
+```bash
+# Show current calibration for all mounts
+mount-multi calibrate-pointing --show
+
+# Clear calibration for a mount
+mount-multi calibrate-pointing --clear --mount 1
+```
+
+**How it works:**
+1. Sync the mount to its current position first (step 5b)
+2. Run calibration (auto or manual)
+3. Mount slews to 3 spread-out targets (Az=90/El=45, Az=180/El=50, Az=270/El=45)
+4. At each target, the actual position is measured (plate solve or phone)
+5. Code solves for the polar misalignment parameters (ME/MA) and saves them
+6. All future GoTo commands automatically apply the correction
+
+The calibration only needs to be redone if the mount is physically moved or re-aligned. Re-syncing does not invalidate the model.
+
+### 5d. Closed-Loop GoTo (alternative to calibration)
+
+Instead of pre-calibrating, you can use plate solving to iteratively correct each goto in real-time. This is slower (requires capture+solve per iteration) but doesn't need any prior calibration:
+
+```bash
+# Goto with plate-solve verification loop
+mount-multi goto-solve 90 45 --mount 1
+
+# Tighter tolerance (default 1 degree)
+mount-multi goto-solve 180 50 --mount 1 --tolerance 0.5
+
+# Adjust plate solving parameters
+mount-multi goto-solve 90 45 --mount 1 --exposure 1.0 --gain 100 --fov 10
+```
+
+The closed-loop goto will:
+1. Slew to target Az/El
+2. Plate solve to check actual position
+3. If error > tolerance, adjust and re-slew
+4. Repeat until on-target (up to 5 iterations)
+
+This works well for one-off pointings. For repeated gotos, calibrate the pointing model first — it's faster since corrections are pre-computed.
 
 ### 6. Point All Mounts
 
@@ -230,29 +301,38 @@ mount-observe --target 90 45 --duration 60 --output ./data/ --cameras 1,2,3,4
 #### `mount-single` - Single Mount Control
 
 ```bash
-mount-single                      # Show current position
-mount-single status               # Detailed mount status
-mount-single goto AZ EL           # Slew to Az/El
-mount-single goto-eq RA DEC       # Slew to RA/DEC (hours, degrees)
-mount-single sync AZ EL           # Sync to known Az/El
-mount-single sync-eq RA DEC       # Sync to known RA/DEC
-mount-single set-location LAT LON # Set geographic location
-mount-single gps-location         # Get location from GPS
-mount-single stop                 # Emergency stop
-mount-single track                # Live position tracking
+mount-single                              # Show current position
+mount-single status                       # Detailed mount status
+mount-single goto AZ EL                   # Slew to Az/El
+mount-single goto-eq RA DEC               # Slew to RA/DEC (hours, degrees)
+mount-single sync AZ EL                   # Sync to known Az/El
+mount-single sync-eq RA DEC               # Sync to known RA/DEC
+mount-single set-location LAT LON         # Set geographic location
+mount-single gps-location                 # Get location from GPS
+mount-single stop                         # Emergency stop
+mount-single track                        # Live position tracking
+mount-single calibrate-pointing           # Calibrate pointing model
+mount-single calibrate-pointing --show    # Show model parameters
+mount-single calibrate-pointing --clear   # Clear calibration
 ```
 
 #### `mount-multi` - Multi-Mount Control
 
 ```bash
-mount-multi status                # Show all mounts
-mount-multi connect               # Auto-connect mounts
-mount-multi goto AZ EL            # Slew all mounts
-mount-multi goto AZ EL --mount 1  # Slew specific mount
-mount-multi sync AZ EL            # Sync all mounts
-mount-multi set-location LAT LON  # Set location for all
-mount-multi gps-location          # Get GPS location
-mount-multi stop                  # Emergency stop all
+mount-multi status                          # Show all mounts
+mount-multi connect                         # Auto-connect mounts
+mount-multi goto AZ EL                      # Slew all mounts
+mount-multi goto AZ EL --mount 1            # Slew specific mount
+mount-multi sync AZ EL                      # Sync all mounts
+mount-multi set-location LAT LON            # Set location for all
+mount-multi gps-location                    # Get GPS location
+mount-multi stop                            # Emergency stop all
+mount-multi calibrate-pointing --auto -m N  # Auto-calibrate (plate solving)
+mount-multi calibrate-pointing --mount N    # Calibrate (phone measurements)
+mount-multi calibrate-pointing --show       # Show model parameters
+mount-multi calibrate-pointing --clear -m N # Clear mount's model
+mount-multi goto-solve AZ EL --mount N      # Closed-loop goto (plate solving)
+mount-multi debug AZ EL                     # Debug coordinate conversions
 ```
 
 #### `mount-calibrate` - Plate Solving Calibration
@@ -385,6 +465,30 @@ mount-single gps-location --wait 120
 - Check FOV estimate: `--fov 10`
 - Try in darker conditions
 
+### Large GoTo Pointing Errors (5-20°)
+
+If the mount is synced but GoTo targets are off by 5-20°, the cause is polar misalignment. The one-star sync only corrects at the sync point; errors grow as the mount moves away.
+
+**Solution:** Run pointing model calibration or use closed-loop goto:
+
+```bash
+# Option 1: Auto-calibrate with plate solving (best)
+mount-multi calibrate-pointing --auto --mount N
+
+# Option 2: Use closed-loop goto (no prior calibration needed)
+mount-multi goto-solve 90 45 --mount N
+
+# Option 3: Manual calibrate with phone (if no camera)
+mount-multi calibrate-pointing --mount N
+```
+
+After calibration, verify by slewing to known positions. Errors should be within 1-2°.
+
+If using `--auto` and the RMS is >2°, plate solving may be inconsistent. Ensure:
+- Stars are visible and in focus
+- Exposure is sufficient (try `--exposure 1.0`)
+- FOV estimate is reasonable (try `--fov 8` or `--fov 12`)
+
 ### Mount Won't Slew
 
 ```bash
@@ -464,12 +568,14 @@ with fits.open('exquisite_20240115_120000.fits') as hdul:
 
 ## Tips for Best Results
 
-1. **Polar alignment**: Spend time on accurate polar alignment for better tracking
-2. **GPS fix**: Wait for 3D fix (4+ satellites) for best accuracy
-3. **Calibration**: Recalibrate after significant temperature changes
-4. **Focus**: Check focus periodically during long sessions
-5. **Dark sky**: Plate solving works better with darker skies
-6. **Cooling**: Let cameras stabilize temperature before capture
+1. **Polar alignment**: Rough alignment (within 15°) is fine if using pointing calibration
+2. **Pointing calibration**: Run `calibrate-pointing --auto` once per session; only redo if mount is moved
+3. **GPS fix**: Wait for 3D fix (4+ satellites) for best accuracy
+4. **Calibration order**: GPS location → sync → pointing calibration → GoTo targets
+5. **Closed-loop vs model**: Use `goto-solve` for one-off pointings; use `calibrate-pointing --auto` for repeated gotos (faster after initial calibration)
+6. **Focus**: Check focus periodically during long sessions
+7. **Dark sky**: Plate solving works better with darker skies
+8. **Cooling**: Let cameras stabilize temperature before capture
 
 ---
 

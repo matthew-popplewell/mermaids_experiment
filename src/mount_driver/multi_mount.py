@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from mount_driver.indi import indi_get, indi_set, check_indi_connection
+from mount_driver.pointing_model import (
+    PointingModel, compute_correction, CalibrationPoint, solve_pointing_model
+)
 
 
 # Configuration file location
@@ -367,14 +370,35 @@ class MultiMountController:
 
         print(f'Target: Az={target_az:.1f}  Alt={target_alt:+.1f}')
         print(f'        RA={target_ra:.4f}h  DEC={target_dec:+.2f}')
-        print()
 
+        # Load pointing models and compute per-mount corrected coordinates
+        pointing_models = config.get('pointing_models', {})
+        mount_targets = {}
+        for m in mounts:
+            model_data = pointing_models.get(str(m.id))
+            if model_data:
+                model = PointingModel.from_dict(model_data)
+                lst = self.get_lst(m.device)
+                if lst is not None:
+                    corrected_ra, corrected_dec = compute_correction(
+                        target_ra, target_dec, lst, model
+                    )
+                    mount_targets[m.id] = (corrected_ra, corrected_dec)
+                    print(f'  Mount {m.id} correction: RA={corrected_ra:.4f}h  DEC={corrected_dec:+.2f} '
+                          f'(ME={math.degrees(model.me):+.2f}° MA={math.degrees(model.ma):+.2f}°)')
+                else:
+                    mount_targets[m.id] = (target_ra, target_dec)
+            else:
+                mount_targets[m.id] = (target_ra, target_dec)
+
+        print()
         print(f'Slewing {len(mounts)} mount(s)...')
 
         results = {}
         with ThreadPoolExecutor(max_workers=len(mounts)) as executor:
             futures = {
-                executor.submit(self._goto_mount, m.device, target_ra, target_dec): m
+                executor.submit(self._goto_mount, m.device,
+                                mount_targets[m.id][0], mount_targets[m.id][1]): m
                 for m in mounts
             }
 
@@ -545,6 +569,166 @@ class MultiMountController:
                 print(f'  Position: Az={status.az:.1f}  Alt={status.alt:+.1f}')
                 print(f'            RA={status.ra:.3f}h  DEC={status.dec:+.1f}')
             print()
+
+    def get_pointing_model(self, mount_id: int) -> Optional[PointingModel]:
+        """Get pointing model for a specific mount."""
+        config = self.load_config()
+        models = config.get('pointing_models', {})
+        data = models.get(str(mount_id))
+        if data:
+            return PointingModel.from_dict(data)
+        return None
+
+    def save_pointing_model(self, mount_id: int, model: PointingModel):
+        """Save pointing model for a specific mount."""
+        config = self.load_config()
+        if 'pointing_models' not in config:
+            config['pointing_models'] = {}
+        config['pointing_models'][str(mount_id)] = model.to_dict()
+        self.save_config(config)
+
+    def clear_pointing_model(self, mount_id: int):
+        """Clear pointing model for a specific mount."""
+        config = self.load_config()
+        models = config.get('pointing_models', {})
+        if str(mount_id) in models:
+            del models[str(mount_id)]
+            config['pointing_models'] = models
+            self.save_config(config)
+
+    def calibrate_pointing(self, mount_id: int) -> bool:
+        """Interactive calibration workflow for a single mount.
+
+        Gotos to 3 spread-out targets, user enters phone measurements,
+        solves for ME/MA and saves the model.
+
+        Args:
+            mount_id: Mount ID to calibrate
+
+        Returns:
+            True if calibration succeeded
+        """
+        config = self.load_config()
+        lat = config.get('lat')
+        if lat is None:
+            print('ERROR: Location not set. Run: mount-multi set-location LAT LON')
+            return False
+
+        mounts = self.discover_mounts()
+        mount = None
+        for m in mounts:
+            if m.id == mount_id:
+                mount = m
+                break
+        if mount is None:
+            print(f'ERROR: Mount {mount_id} not found')
+            return False
+
+        device = mount.device
+
+        # Calibration targets: spread across the sky
+        targets = [
+            (90.0, 45.0),    # East, mid-altitude
+            (180.0, 50.0),   # South, mid-altitude
+            (270.0, 45.0),   # West, mid-altitude
+        ]
+
+        print(f'=== Pointing Calibration for Mount {mount_id} ===')
+        print()
+        print('This will slew to 3 targets. At each, measure the actual')
+        print('Az/El with your phone compass/inclinometer and enter them.')
+        print()
+        print('Make sure mount is synced to current position first!')
+        print()
+
+        cal_points = []
+
+        for i, (target_az, target_alt) in enumerate(targets):
+            print(f'--- Target {i+1}/3: Az={target_az:.0f}  El={target_alt:.0f} ---')
+
+            # Convert to RA/DEC
+            result = self.azalt_to_radec(target_az, target_alt, lat, device)
+            if result is None:
+                print('ERROR: Cannot convert coordinates')
+                return False
+
+            target_ra, target_dec = result
+            lst = self.get_lst(device)
+            if lst is None:
+                print('ERROR: Cannot read LST')
+                return False
+
+            print(f'  Commanding: RA={target_ra:.4f}h  DEC={target_dec:+.2f}')
+            print(f'  Slewing...')
+
+            success = self._goto_mount(device, target_ra, target_dec)
+            if not success:
+                print('  WARNING: GoTo may not have completed')
+
+            time.sleep(1.0)  # Let mount settle
+
+            # Get actual measurement from user
+            print()
+            try:
+                actual_az_str = input(f'  Measured Az (degrees): ')
+                actual_alt_str = input(f'  Measured El (degrees): ')
+                actual_az = float(actual_az_str)
+                actual_alt = float(actual_alt_str)
+            except (ValueError, EOFError):
+                print('  ERROR: Invalid input, skipping point')
+                continue
+
+            # Convert actual measurement to RA/DEC
+            # Re-read LST since time has passed
+            lst = self.get_lst(device)
+            if lst is None:
+                print('  ERROR: Cannot read LST')
+                continue
+
+            actual_result = self.azalt_to_radec(actual_az, actual_alt, lat, device)
+            if actual_result is None:
+                print('  ERROR: Cannot convert actual coordinates')
+                continue
+
+            actual_ra, actual_dec = actual_result
+
+            cal_points.append(CalibrationPoint(
+                commanded_ra=target_ra,
+                commanded_dec=target_dec,
+                actual_ra=actual_ra,
+                actual_dec=actual_dec,
+                lst=lst
+            ))
+
+            print(f'  Point recorded. Error: Az={actual_az - target_az:+.1f}  El={actual_alt - target_alt:+.1f}')
+            print()
+
+        if len(cal_points) < 2:
+            print('ERROR: Need at least 2 valid calibration points')
+            return False
+
+        # Solve the pointing model
+        try:
+            model, rms = solve_pointing_model(cal_points)
+        except ValueError as e:
+            print(f'ERROR: Cannot solve model: {e}')
+            return False
+
+        print(f'=== Calibration Result ===')
+        print(f'  ME (azimuth error):  {math.degrees(model.me):+.3f}° ({model.me:+.4f} rad)')
+        print(f'  MA (altitude error): {math.degrees(model.ma):+.3f}° ({model.ma:+.4f} rad)')
+        print(f'  RMS residual: {rms:.3f}°')
+
+        if rms > 2.0:
+            print(f'  *** WARNING: RMS > 2° - measurements may be inaccurate ***')
+            print(f'  Consider re-running calibration with more careful measurements.')
+
+        # Save model
+        self.save_pointing_model(mount_id, model)
+        print()
+        print(f'  Model saved. All future gotos for Mount {mount_id} will apply correction.')
+
+        return True
 
     def get_available_ports(self) -> List[str]:
         """Get list of available ttyACM ports (Star Adventurer GTi mounts)."""
