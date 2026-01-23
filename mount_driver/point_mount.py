@@ -38,6 +38,7 @@ import json
 import os
 import subprocess
 import math
+from datetime import datetime, timezone
 
 # Add src/ to path for pointing_model import
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -156,6 +157,26 @@ def get_lst():
     if lst:
         return float(lst)
     return None
+
+
+def compute_lst_from_system(lon_deg):
+    """Compute LST from system UTC clock and longitude (hours)."""
+    now = datetime.now(timezone.utc)
+    year, month, day = now.year, now.month, now.day
+    if month <= 2:
+        year -= 1
+        month += 12
+    A = year // 100
+    B = 2 - A + A // 4
+    JD = int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + B - 1524.5
+    JD += (now.hour + now.minute / 60.0 + now.second / 3600.0
+           + now.microsecond / 3.6e9) / 24.0
+    D = JD - 2451545.0
+    T = D / 36525.0
+    GMST_deg = (280.46061837 + 360.98564736629 * D
+                + 0.000387933 * T**2 - T**3 / 38710000.0)
+    LST_deg = (GMST_deg + lon_deg) % 360.0
+    return LST_deg / 15.0
 
 
 def azalt_to_radec(az, alt, lat):
@@ -277,6 +298,22 @@ def goto_horizontal(target_az, target_alt):
 
     print(f'Current: Az={current_az:.1f}°  Alt={current_alt:+.1f}°')
     print(f'Target:  Az={target_az:.1f}°  Alt={target_alt:+.1f}°')
+
+    # Verify mount time against system clock
+    lon = config.get('lon')
+    if lon is not None:
+        mount_lst = get_lst()
+        if mount_lst is not None:
+            system_lst = compute_lst_from_system(lon)
+            diff_h = mount_lst - system_lst
+            if diff_h > 12:
+                diff_h -= 24
+            elif diff_h < -12:
+                diff_h += 24
+            diff_min = diff_h * 60.0
+            if abs(diff_min) > 1.0:
+                print(f'WARNING: Mount clock off by {diff_min:+.1f} min '
+                      f'(~{abs(diff_min)/4.0:.1f}° pointing error)')
 
     # Safety check - don't point below horizon
     if target_alt < -5:

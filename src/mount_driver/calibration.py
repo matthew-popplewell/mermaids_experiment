@@ -425,6 +425,16 @@ def calibrate_all_mounts(
     if pairs is None:
         pairs = {m.id: m.id - 1 for m in mounts}
 
+    # Load stored camera map from config if no explicit map provided
+    if camera_id_map is None:
+        controller = MultiMountController()
+        config = controller.load_config()
+        stored_map = config.get('camera_map', {})
+        if stored_map:
+            camera_id_map = {int(k): v for k, v in stored_map.items()}
+            print(f'Using stored camera map: {stored_map}')
+            print()
+
     results = {}
 
     for mount in mounts:

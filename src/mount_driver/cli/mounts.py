@@ -37,6 +37,10 @@ Commands:
   sync AZ EL                Sync all mounts to Az/El
   set-location LAT LON      Set location for all mounts
   gps-location              Get location from GPS
+  check-time                Compare mount clock vs system clock
+  sync-time                 Sync mount UTC from system clock
+  set-camera-map M CAM ...  Set mount-camera pairings (stored in config)
+  show-camera-map           Show stored camera-mount pairings
   stop                      Emergency stop all mounts
   debug                     Debug coordinate conversions (round-trip test)
   debug AZ EL               Test conversion for specific Az/El
@@ -164,6 +168,111 @@ Examples:
             print('  - Wait longer: mount-multi gps-location --wait 120')
             return 1
 
+    elif args.command == 'check-time':
+        from mount_driver.multi_mount import compute_lst_from_system
+        config = controller.load_config()
+        lon = config.get('lon')
+        if lon is None:
+            print('ERROR: Location not set. Run: mount-multi set-location LAT LON')
+            return 1
+        mounts = controller.discover_mounts()
+        if not mounts:
+            print('ERROR: No mounts discovered')
+            return 1
+        system_lst = compute_lst_from_system(lon)
+        print(f'System LST: {system_lst:.4f} hours (from UTC + longitude)')
+        print()
+        for mount in mounts:
+            mount_lst = controller.get_lst(mount.device)
+            if mount_lst is None:
+                print(f'  {mount.device}: Cannot read LST')
+                continue
+            diff_min = (mount_lst - system_lst)
+            if diff_min > 12:
+                diff_min -= 24
+            elif diff_min < -12:
+                diff_min += 24
+            diff_min *= 60.0
+            status = 'OK' if abs(diff_min) < 1.0 else f'*** OFF BY {abs(diff_min):.1f} min ***'
+            print(f'  {mount.device}: LST={mount_lst:.4f}h  diff={diff_min:+.2f} min  {status}')
+        return 0
+
+    elif args.command == 'sync-time':
+        from mount_driver.multi_mount import compute_lst_from_system
+        config = controller.load_config()
+        lon = config.get('lon')
+        mounts = controller.discover_mounts()
+        if not mounts:
+            print('ERROR: No mounts discovered')
+            return 1
+        # Show before state
+        if lon is not None:
+            system_lst = compute_lst_from_system(lon)
+            for mount in mounts:
+                mount_lst = controller.get_lst(mount.device)
+                if mount_lst is not None:
+                    diff_h = mount_lst - system_lst
+                    if diff_h > 12:
+                        diff_h -= 24
+                    elif diff_h < -12:
+                        diff_h += 24
+                    print(f'  {mount.device} before: off by {diff_h*60:+.2f} min')
+        # Sync
+        print('Syncing mount UTC to system clock...')
+        if controller.sync_time():
+            import time as _time
+            _time.sleep(1.0)  # Give mount time to update LST
+            # Show after state
+            if lon is not None:
+                system_lst = compute_lst_from_system(lon)
+                for mount in mounts:
+                    mount_lst = controller.get_lst(mount.device)
+                    if mount_lst is not None:
+                        diff_h = mount_lst - system_lst
+                        if diff_h > 12:
+                            diff_h -= 24
+                        elif diff_h < -12:
+                            diff_h += 24
+                        print(f'  {mount.device} after:  off by {diff_h*60:+.2f} min')
+            print('Done.')
+            return 0
+        else:
+            print('ERROR: Failed to set time on mounts')
+            return 1
+
+    elif args.command == 'set-camera-map' and len(args.args) >= 2:
+        # Usage: mount-multi set-camera-map 1 CAM_1 [2 CAM_2 ...]
+        # Pairs are: mount_id camera_id mount_id camera_id ...
+        pairs = args.args
+        if len(pairs) % 2 != 0:
+            print('ERROR: Arguments must be pairs of MOUNT_ID CAMERA_ID')
+            print('  Example: mount-multi set-camera-map 1 CAM_1 2 CAM_2 3 CAM_3 4 CAM_4')
+            return 1
+        config = controller.load_config()
+        camera_map = config.get('camera_map', {})
+        for i in range(0, len(pairs), 2):
+            mount_id = pairs[i]
+            cam_id = pairs[i+1]
+            camera_map[mount_id] = cam_id
+        config['camera_map'] = camera_map
+        controller.save_config(config)
+        print('Camera-mount mapping saved:')
+        for mid, cid in sorted(camera_map.items()):
+            print(f'  Mount {mid} → {cid}')
+        return 0
+
+    elif args.command == 'show-camera-map':
+        config = controller.load_config()
+        camera_map = config.get('camera_map', {})
+        if not camera_map:
+            print('No camera-mount mapping configured.')
+            print('Set with: mount-multi set-camera-map 1 CAM_1 2 CAM_2 ...')
+            return 0
+        print('Camera-mount mapping:')
+        for mid, cid in sorted(camera_map.items()):
+            print(f'  Mount {mid} → {cid}')
+        return 0
+
     elif args.command == 'goto' and len(args.args) >= 2:
         try:
             target_az = float(args.args[0])
@@ -221,7 +330,23 @@ def cmd_debug(controller, args):
     if lst is None:
         print('ERROR: Cannot read LST from mount')
         return 1
-    print(f'LST: {lst:.4f} hours')
+    print(f'Mount LST: {lst:.4f} hours')
+
+    # Cross-check with system clock
+    from mount_driver.multi_mount import compute_lst_from_system
+    if lon is not None:
+        system_lst = compute_lst_from_system(lon)
+        diff_min = (lst - system_lst)
+        if diff_min > 12:
+            diff_min -= 24
+        elif diff_min < -12:
+            diff_min += 24
+        diff_min *= 60.0
+        print(f'System LST: {system_lst:.4f} hours')
+        print(f'Difference: {diff_min:+.2f} min (mount - system)')
+        if abs(diff_min) > 1.0:
+            print(f'  *** WARNING: {abs(diff_min):.1f} min offset ≈ '
+                  f'{abs(diff_min)/4.0:.1f}° pointing error in RA ***')
     print()
 
     # Get test coordinates
@@ -362,10 +487,19 @@ def cmd_calibrate_pointing(controller, args):
 
     if args.auto:
         from mount_driver.calibration import auto_calibrate_pointing
+        camera_id = args.camera
         camera_index = args.camera_index if args.camera_index is not None else args.mount - 1
+        # Look up stored camera mapping if no explicit camera specified
+        if camera_id is None and args.camera_index is None:
+            config = controller.load_config()
+            camera_map = config.get('camera_map', {})
+            mapped_id = camera_map.get(str(args.mount))
+            if mapped_id:
+                camera_id = mapped_id
+                print(f'Using camera {camera_id} for Mount {args.mount} (from config)')
         return 0 if auto_calibrate_pointing(
             mount_id=args.mount,
-            camera_id=args.camera,
+            camera_id=camera_id,
             camera_index=camera_index,
             exposure_s=args.exposure,
             gain=args.gain,
@@ -390,13 +524,22 @@ def cmd_goto_solve(controller, args):
         print('ERROR: Specify which mount: --mount N')
         return 1
 
+    camera_id = args.camera
     camera_index = args.camera_index if args.camera_index is not None else args.mount - 1
+    # Look up stored camera mapping if no explicit camera specified
+    if camera_id is None and args.camera_index is None:
+        config = controller.load_config()
+        camera_map = config.get('camera_map', {})
+        mapped_id = camera_map.get(str(args.mount))
+        if mapped_id:
+            camera_id = mapped_id
+            print(f'Using camera {camera_id} for Mount {args.mount} (from config)')
 
     success = goto_with_solve(
         target_az=target_az,
         target_alt=target_alt,
         mount_id=args.mount,
-        camera_id=args.camera,
+        camera_id=camera_id,
         camera_index=camera_index,
         exposure_s=args.exposure,
         gain=args.gain,

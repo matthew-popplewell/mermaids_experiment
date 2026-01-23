@@ -17,6 +17,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -37,6 +38,45 @@ MOUNT_PREFIX = 'Mount '
 STEPS_PER_360_RA = 3628800.0
 STEPS_PER_360_DEC = 2903040.0
 GOTO_TIMEOUT = 300
+
+
+def compute_lst_from_system(lon_deg: float) -> float:
+    """Compute Local Sidereal Time from system UTC clock and longitude.
+
+    Uses the IAU formula for GMST. Accuracy ~1 second (ignores UT1-UTC).
+
+    Args:
+        lon_deg: Observer longitude in degrees (east positive)
+
+    Returns:
+        LST in hours (0-24)
+    """
+    now = datetime.now(timezone.utc)
+
+    # Julian Date from UTC
+    year = now.year
+    month = now.month
+    day = now.day
+    if month <= 2:
+        year -= 1
+        month += 12
+    A = year // 100
+    B = 2 - A + A // 4
+    JD = int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + B - 1524.5
+    JD += (now.hour + now.minute / 60.0 + now.second / 3600.0
+           + now.microsecond / 3.6e9) / 24.0
+
+    # Days since J2000.0
+    D = JD - 2451545.0
+    T = D / 36525.0
+
+    # GMST in degrees (IAU formula)
+    GMST_deg = (280.46061837 + 360.98564736629 * D
+                + 0.000387933 * T**2 - T**3 / 38710000.0)
+
+    # LST = GMST + longitude
+    LST_deg = (GMST_deg + lon_deg) % 360.0
+    return LST_deg / 15.0
 
 
 @dataclass
@@ -157,6 +197,54 @@ class MultiMountController:
         if lst:
             return float(lst)
         return None
+
+    def verify_mount_time(self, device: str, lon: float) -> Optional[float]:
+        """Check mount's LST against system clock.
+
+        Args:
+            device: INDI device name
+            lon: Observer longitude in degrees
+
+        Returns:
+            LST difference in minutes (mount - system), or None if can't read mount LST.
+            Positive means mount is ahead; negative means mount is behind.
+        """
+        mount_lst = self.get_lst(device)
+        if mount_lst is None:
+            return None
+        system_lst = compute_lst_from_system(lon)
+
+        # Difference in hours, handling wrap-around
+        diff_h = mount_lst - system_lst
+        if diff_h > 12:
+            diff_h -= 24
+        elif diff_h < -12:
+            diff_h += 24
+
+        return diff_h * 60.0  # Convert to minutes
+
+    def sync_time(self) -> bool:
+        """Sync mount UTC time from computer's system clock.
+
+        Sets TIME_UTC on all discovered mounts to the current system UTC.
+
+        Returns:
+            True if time was set on at least one mount
+        """
+        mounts = self.discover_mounts()
+        if not mounts:
+            return False
+
+        now = datetime.now(timezone.utc)
+        utc_str = now.strftime('%Y-%m-%dT%H:%M:%S')
+
+        success = False
+        for mount in mounts:
+            device = mount.device
+            # INDI standard: TIME_UTC.UTC = ISO time string, OFFSET = hours from UTC
+            if indi_set(f'{device}.TIME_UTC.UTC={utc_str};OFFSET=0'):
+                success = True
+        return success
 
     def azalt_to_radec(self, az: float, alt: float, lat: float, device: str) -> Optional[Tuple[float, float]]:
         """Convert Az/Alt to RA/DEC using LST from specified mount.
@@ -361,6 +449,17 @@ class MultiMountController:
                 return False
 
         first_device = mounts[0].device
+
+        # Verify mount time against system clock
+        lon = config.get('lon')
+        if lon is not None:
+            time_diff = self.verify_mount_time(first_device, lon)
+            if time_diff is not None and abs(time_diff) > 1.0:
+                pointing_err_deg = abs(time_diff) / 4.0  # 1 min of time ≈ 0.25° of RA
+                print(f'WARNING: Mount clock off by {time_diff:+.1f} min '
+                      f'(~{pointing_err_deg:.1f}° pointing error)')
+                print(f'         Mount LST vs system LST. Consider restarting INDI to re-sync.')
+
         result = self.azalt_to_radec(target_az, target_alt, lat, first_device)
         if result is None:
             print('ERROR: Cannot convert coordinates')

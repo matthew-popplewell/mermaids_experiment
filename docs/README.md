@@ -103,10 +103,14 @@ mount-diagnose
 # 3. Get GPS location
 mount-multi gps-location
 
-# 4. Point all mounts to target
+# 4. Verify mount clock (sync if off by >1 min)
+mount-multi check-time
+mount-multi sync-time      # Only if check-time shows offset
+
+# 5. Point all mounts to target
 mount-multi goto 90 45    # Az=90, El=45
 
-# 5. Run burst capture
+# 6. Run burst capture
 asi-burst -d 60 -o ./data/ --cameras 1,2,3,4 --no-solve
 ```
 
@@ -153,6 +157,45 @@ mount-multi gps-location
 # Or set manually
 mount-multi set-location 39.917506 -105.002898
 ```
+
+### 3b. Verify Mount Clock
+
+The mounts derive LST (Local Sidereal Time) from their internal clock. If the clock is wrong, all Az/El → RA/DEC conversions will be off (1 minute of time error ≈ 0.25° pointing error).
+
+```bash
+# Check mount time against system clock
+mount-multi check-time
+
+# If off by more than 1 minute, sync from system clock
+mount-multi sync-time
+```
+
+The `goto` command also prints an automatic warning if the mount clock is off by more than 1 minute.
+
+### 3c. Camera-Mount Pairing
+
+Each mount has a paired camera for plate solving. Camera indices (0, 1, 2, 3) are assigned by the ZWO SDK based on USB enumeration order — this can change across reboots. For reliable pairing, assign persistent IDs stored in camera firmware:
+
+```bash
+# List cameras and current IDs
+asi-cam-setup --list
+
+# Assign IDs (identify cameras by covering lenses one at a time)
+asi-cam-setup --index 0 --set-id 1    # Stores "CAM_1" in firmware
+asi-cam-setup --index 1 --set-id 2    # Stores "CAM_2"
+asi-cam-setup --index 2 --set-id 3
+asi-cam-setup --index 3 --set-id 4
+
+# Store mount-camera pairing in config
+mount-multi set-camera-map 1 CAM_1 2 CAM_2 3 CAM_3 4 CAM_4
+
+# Verify
+mount-multi show-camera-map
+```
+
+Once configured, all plate-solving commands (`calibrate-pointing --auto`, `goto-solve`, `mount-calibrate --all`) automatically use the correct camera for each mount. You can still override with `--camera CAM_X` or `--camera-index N`.
+
+Camera IDs only need to be set once (they survive power cycles). The camera map in config persists across sessions.
 
 ### 4. Polar Alignment (Physical)
 
@@ -326,6 +369,10 @@ mount-multi goto AZ EL --mount 1            # Slew specific mount
 mount-multi sync AZ EL                      # Sync all mounts
 mount-multi set-location LAT LON            # Set location for all
 mount-multi gps-location                    # Get GPS location
+mount-multi check-time                      # Compare mount clock vs system clock
+mount-multi sync-time                       # Sync mount UTC from system clock
+mount-multi set-camera-map 1 CAM_1 2 CAM_2  # Set mount-camera pairings
+mount-multi show-camera-map                 # Show stored pairings
 mount-multi stop                            # Emergency stop all
 mount-multi calibrate-pointing --auto -m N  # Auto-calibrate (plate solving)
 mount-multi calibrate-pointing --mount N    # Calibrate (phone measurements)
@@ -489,6 +536,42 @@ If using `--auto` and the RMS is >2°, plate solving may be inconsistent. Ensure
 - Exposure is sufficient (try `--exposure 1.0`)
 - FOV estimate is reasonable (try `--fov 8` or `--fov 12`)
 
+### Consistent RA Offset (Mount Clock Wrong)
+
+If the mount consistently points to the wrong RA (but DEC is correct), the mount's internal clock is likely wrong. The mount derives LST from its UTC clock — if the clock is off, all coordinate conversions are shifted in RA.
+
+**Impact**: 1 minute of clock error ≈ 0.25° RA error. A 1-hour clock error causes 15° pointing error.
+
+```bash
+# Diagnose: compare mount time with system clock
+mount-multi check-time
+
+# Fix: sync mount UTC from computer's system clock
+mount-multi sync-time
+
+# Verify fix
+mount-multi check-time
+```
+
+The `goto` command prints an automatic warning if the clock difference exceeds 1 minute.
+
+**Note**: The INDI driver may or may not auto-sync the mount's clock on connection. If you see clock drift, run `mount-multi sync-time` at the start of each session.
+
+### Wrong Camera Used for Plate Solving
+
+If plate solving returns wrong positions or fails for specific mounts, the camera-mount pairing may be wrong.
+
+```bash
+# Check current pairing
+mount-multi show-camera-map
+
+# Re-configure (identify cameras by covering lenses)
+asi-cam-setup --list
+mount-multi set-camera-map 1 CAM_1 2 CAM_2 3 CAM_3 4 CAM_4
+```
+
+Without a stored camera map, the default pairing is mount N → camera index N-1, which depends on USB enumeration order and can change across reboots.
+
 ### Mount Won't Slew
 
 ```bash
@@ -571,11 +654,13 @@ with fits.open('exquisite_20240115_120000.fits') as hdul:
 1. **Polar alignment**: Rough alignment (within 15°) is fine if using pointing calibration
 2. **Pointing calibration**: Run `calibrate-pointing --auto` once per session; only redo if mount is moved
 3. **GPS fix**: Wait for 3D fix (4+ satellites) for best accuracy
-4. **Calibration order**: GPS location → sync → pointing calibration → GoTo targets
-5. **Closed-loop vs model**: Use `goto-solve` for one-off pointings; use `calibrate-pointing --auto` for repeated gotos (faster after initial calibration)
-6. **Focus**: Check focus periodically during long sessions
-7. **Dark sky**: Plate solving works better with darker skies
-8. **Cooling**: Let cameras stabilize temperature before capture
+4. **Mount clock**: Run `mount-multi check-time` after connecting; sync if off by >1 min
+5. **Camera IDs**: Set firmware IDs once with `asi-cam-setup`; store pairing with `set-camera-map`
+6. **Calibration order**: GPS location → sync time → camera map → sync → pointing calibration → GoTo
+7. **Closed-loop vs model**: Use `goto-solve` for one-off pointings; use `calibrate-pointing --auto` for repeated gotos (faster after initial calibration)
+8. **Focus**: Check focus periodically during long sessions
+9. **Dark sky**: Plate solving works better with darker skies
+10. **Cooling**: Let cameras stabilize temperature before capture
 
 ---
 
