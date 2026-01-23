@@ -1345,7 +1345,6 @@ dependencies = [
     { name = "astropy" },
     { name = "fitsio" },
     { name = "matplotlib" },
-    { name = "numcodecs" },
     { name = "numpy" },
     { name = "pillow" },
     { name = "plotly" },
@@ -1376,7 +1375,6 @@ requires-dist = [
     { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.1.1" },
     { name = "line-profiler", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "matplotlib", specifier = ">=3.9.4" },
-    { name = "numcodecs", specifier = ">=0.12.0" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pillow", specifier = ">=11.2.1" },
     { name = "plotly", specifier = ">=5.0.0" },
@@ -1386,7 +1384,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.13.1" },
     { name = "tetra3", git = "https://github.com/esa/tetra3.git" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "zarr", specifier = ">=2.18.0" },
+    { name = "zarr", specifier = ">=3.0.0" },
     { name = "zwoasi", specifier = ">=0.2.0" },
 ]
 provides-extras = ["dev"]

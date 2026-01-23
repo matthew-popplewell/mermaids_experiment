@@ -336,6 +336,151 @@ def calibrate_mount(
     )
 
 
+def solve_from_file(
+    image_path: str,
+    fov_estimate: float = 10.0,
+) -> CalibrationResult:
+    """Plate solve a saved image file (for daytime testing).
+
+    Supports zarr directories (burst.zarr or parent exquisite dir),
+    TIFF, FITS, and PNG files.
+
+    Args:
+        image_path: Path to image file or zarr directory
+        fov_estimate: Estimated field of view in degrees
+
+    Returns:
+        CalibrationResult with plate solution (no mount sync)
+    """
+    import numpy as np
+    from asi_driver.registration import solve_image
+
+    path = Path(image_path)
+
+    print('=== Plate Solve Test (from file) ===\n')
+    print(f'Image: {path}')
+
+    # Load image based on format
+    frame = None
+    metadata = {}
+
+    if path.is_dir():
+        # Zarr directory - could be burst.zarr or parent exquisite dir
+        import zarr
+
+        zarr_path = path
+        if not (path / 'zarr.json').exists() and not (path / '.zarray').exists():
+            # Try burst.zarr subdirectory
+            zarr_sub = path / 'burst.zarr'
+            if zarr_sub.exists():
+                zarr_path = zarr_sub
+            else:
+                return CalibrationResult(
+                    success=False, camera_id=None, mount_id=0,
+                    plate_solution=None, ra_degrees=0, ra_hours=0,
+                    dec_degrees=0, pointing_error_arcmin=None,
+                    message=f'No zarr data found in {path}',
+                )
+
+        store = zarr.open(str(zarr_path), mode='r')
+        metadata = dict(store.attrs)
+        frames = store['frames']
+        # Handle shape: (n_cams, n_frames, H, W) or (n_frames, H, W)
+        if frames.ndim == 4:
+            frame = np.array(frames[0, 0])
+        elif frames.ndim == 3:
+            frame = np.array(frames[0])
+        else:
+            frame = np.array(frames)
+
+    elif path.suffix.lower() in ('.tiff', '.tif', '.png', '.jpg', '.jpeg', '.bmp'):
+        from PIL import Image
+        img = Image.open(str(path))
+        frame = np.array(img)
+
+    elif path.suffix.lower() in ('.fits', '.fit'):
+        try:
+            import fitsio
+            fits_file = fitsio.FITS(str(path), 'r')
+            frame = fits_file[0].read()
+            fits_file.close()
+        except ImportError:
+            from astropy.io import fits
+            frame = fits.getdata(str(path))
+
+    else:
+        return CalibrationResult(
+            success=False, camera_id=None, mount_id=0,
+            plate_solution=None, ra_degrees=0, ra_hours=0,
+            dec_degrees=0, pointing_error_arcmin=None,
+            message=f'Unsupported file format: {path.suffix}',
+        )
+
+    if frame is None:
+        return CalibrationResult(
+            success=False, camera_id=None, mount_id=0,
+            plate_solution=None, ra_degrees=0, ra_hours=0,
+            dec_degrees=0, pointing_error_arcmin=None,
+            message='Failed to load image data',
+        )
+
+    print(f'Loaded: {frame.shape[1]}x{frame.shape[0]} {frame.dtype}')
+    if metadata:
+        cam = metadata.get('CAMERA', metadata.get('camera', ''))
+        if cam:
+            print(f'Camera: {cam}')
+        cam_id = metadata.get('CAMERAID', '')
+        if cam_id:
+            print(f'Camera ID: {cam_id}')
+        obs_date = metadata.get('DATE-OBS', '')
+        if obs_date:
+            print(f'Date: {obs_date}')
+        stored_fov = metadata.get('FOV')
+        if stored_fov:
+            print(f'Previously solved FOV: {stored_fov:.2f} deg')
+    print()
+
+    print('Plate solving...')
+    solution = solve_image(
+        frame,
+        fov_estimate=fov_estimate,
+        distortion=(-0.2, 0.1),
+    )
+
+    if solution is None:
+        return CalibrationResult(
+            success=False, camera_id=metadata.get('CAMERAID'),
+            mount_id=0, plate_solution=None,
+            ra_degrees=0, ra_hours=0, dec_degrees=0,
+            pointing_error_arcmin=None,
+            message='Plate solve failed. Try adjusting --fov.',
+        )
+
+    ra_hours = solution.ra / 15.0
+    print(f'  RA:  {solution.ra:.4f} deg ({ra_hours:.4f}h)')
+    print(f'  DEC: {solution.dec:+.4f} deg')
+    print(f'  FOV: {solution.fov:.2f} deg')
+    print(f'  Roll: {solution.roll:.1f} deg')
+    if solution.num_matches:
+        print(f'  Matched: {solution.num_matches} stars')
+    if solution.rmse:
+        print(f'  RMSE: {solution.rmse:.4f}')
+    print()
+    print('Plate solve successful (test mode, no mount sync)')
+
+    return CalibrationResult(
+        success=True,
+        camera_id=metadata.get('CAMERAID'),
+        mount_id=0,
+        plate_solution=solution,
+        ra_degrees=solution.ra,
+        ra_hours=ra_hours,
+        dec_degrees=solution.dec,
+        pointing_error_arcmin=None,
+        message='Test solve successful.',
+    )
+
+
 def verify_calibration(
     mount_id: int = 1,
     camera_id: Optional[str] = None,

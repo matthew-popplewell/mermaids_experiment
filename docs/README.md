@@ -141,11 +141,12 @@ ls /dev/ttyUSB*  # GPS (may also be ttyACM)
 # Or specify number of mounts explicitly
 ./scripts/start_server.sh 4
 ```
-
 The server will:
 - Start INDI server with mount drivers
 - Auto-connect mounts to USB ports
 - Keep running in foreground (Ctrl+C to stop)
+
+If the mounts cannot be found after starting the server/they were not autoconnected, run multi-mount connect to manually connect them.
 
 ### 3. Set Location from GPS
 In new terminal:
@@ -206,7 +207,16 @@ Before calibrating, physically align mounts:
 3. Use built-in polar scope if available
 4. Fine-tune using drift alignment or electronic polar alignment
 
-### 5. Calibrate via Plate Solving
+### 5. Focus Cameras
+
+```bash
+# Interactive focus adjustment
+asi-focus --camera 0
+```
+
+Repeat for each camera, adjusting focus until stars are sharp.
+
+### 6a. Calibrate via Plate Solving
 
 ```bash
 # Calibrate all mounts using their paired cameras
@@ -221,14 +231,16 @@ This will:
 - Plate solve to determine actual sky position
 - Sync each mount to match the solution
 
-### 5b. Calibrate manually (if plate solving fails)
+### 6b. Calibrate manually (if plate solving fails)
 ```bash
 mount-multi sync AZ EL
 ```
 
-### 5c. Pointing Model Calibration
+### 6c. Pointing Model Calibration
 
 Even with a sync, mounts that are only roughly polar aligned (5-15° off) will have growing GoTo errors as they slew away from the sync point. The pointing model corrects for this by measuring the polar misalignment and applying a per-mount correction to all future GoTo commands.
+
+Ignore this if the mounts are polar aligned.
 
 **Option A: Auto-calibrate with plate solving (preferred)**
 
@@ -273,7 +285,7 @@ mount-multi calibrate-pointing --clear --mount 1
 
 The calibration only needs to be redone if the mount is physically moved or re-aligned. Re-syncing does not invalidate the model.
 
-### 5d. Closed-Loop GoTo (alternative to calibration)
+### 6d. Closed-Loop GoTo (alternative to calibration)
 
 Instead of pre-calibrating, you can use plate solving to iteratively correct each goto in real-time. This is slower (requires capture+solve per iteration) but doesn't need any prior calibration:
 
@@ -296,7 +308,7 @@ The closed-loop goto will:
 
 This works well for one-off pointings. For repeated gotos, calibrate the pointing model first — it's faster since corrections are pre-computed.
 
-### 6. Point All Mounts
+### 7a. Point All Mounts
 
 ```bash
 # Slew all mounts to target Az/El
@@ -306,14 +318,25 @@ mount-multi goto 90 45
 mount-multi status
 ```
 
-### 7. Focus Cameras
+Double check that the mounts slewed to the correct pointing before performign a collect. This can be done using an app on your phone or by checking against a known object first.
+
+### 7b. Manually Point Mounts
+If the mounts do not slew to the commanded Az/El, manually point the mounts using 
 
 ```bash
-# Interactive focus adjustment
-asi-focus --camera 0
+asi-target
 ```
 
-Repeat for each camera, adjusting focus until stars are sharp.
+This should open a similar display as ```asi-focus``` but overlayed with Az/El coordinates to help pointing.
+
+### 7c. Point using SynScan Pro
+The SynScan Pro app is developed by SkyWatch for commanding the telescope mounts. It allows one to connect to a telescope's WiFi network and control the telescope from your phone/laptop. It is a bit tedious as it cannot command multiple mounts at once. In case all other steps fail, fallback to using this.
+
+1. Download the SynScan Pro app on your personal device.
+2. Connect the personal device to the mount's WiFi network.
+3. In the app, click connect and then the IP address of the mount.
+4. Under alignment, choose 1 or 2 star alignment. Select visible stars that you can easily align the mount to.
+5. The mount should slew to each star in order. After slewing, use the arrow controls at the bottom of the app to adjust the mount if needed.
 
 ### 8. Burst Capture
 

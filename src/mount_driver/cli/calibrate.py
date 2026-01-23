@@ -16,6 +16,7 @@ from mount_driver.calibration import (
     calibrate_mount,
     calibrate_all_mounts,
     verify_calibration,
+    solve_from_file,
 )
 
 
@@ -101,6 +102,11 @@ Examples:
         action='store_true',
         help='List connected cameras and exit',
     )
+    parser.add_argument(
+        '--test-image',
+        type=str,
+        help='Path to saved image for testing plate solve (zarr dir, TIFF, FITS, PNG)',
+    )
 
     args = parser.parse_args()
 
@@ -128,6 +134,16 @@ Examples:
         except Exception as e:
             print(f'Error: {e}')
         return 0
+
+    # Test image mode (no mount/camera needed)
+    if args.test_image:
+        result = solve_from_file(
+            image_path=args.test_image,
+            fov_estimate=args.fov,
+        )
+        if not result.success:
+            print(f'\nSolve failed: {result.message}')
+        return 0 if result.success else 1
 
     # Determine camera ID or index
     camera_id = None

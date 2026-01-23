@@ -16,12 +16,11 @@ dependencies = [
     "astropy>=6.0.1",
     "fitsio>=1.2.0",
     "matplotlib>=3.9.4",
-    "numcodecs>=0.12.0",
     "numpy>=1.26.4",
     "pillow>=11.2.1",
     "scipy>=1.13.1",
     "tqdm>=4.67.1",
-    "zarr>=2.18.0",
+    "zarr>=3.0.0",
     "zwoasi>=0.2.0",
     "tetra3 @ git+https://github.com/esa/tetra3.git",
 ]
@@ -41,6 +40,8 @@ asi-focus = "asi_driver.cli.focus:main"
 asi-burst = "asi_driver.cli.burst:main"
 asi-gps-test = "asi_driver.cli.gps_test:main"
 asi-cam-setup = "asi_driver.cli.cam_setup:main"
+asi-target = "asi_driver.cli.target:main"
+asi-view = "asi_driver.cli.view:main"
 
 # Mount driver CLI commands
 mount-single = "mount_driver.cli.mount:main"
